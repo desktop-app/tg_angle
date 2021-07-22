@@ -36,7 +36,7 @@ if (WIN32)
     target_compile_definitions(libanglebuild
     INTERFACE
         ANGLE_IS_WIN
-        ANGLE_DEFAULT_D3D11=0
+        ANGLE_DEFAULT_D3D11=1
         ANGLE_ENABLE_D3D11
         ANGLE_ENABLE_D3D11_COMPOSITOR_NATIVE_WINDOW
         ANGLE_ENABLE_D3D9

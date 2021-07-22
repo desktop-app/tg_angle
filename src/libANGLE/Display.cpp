@@ -189,7 +189,7 @@ EGLAttrib GetDisplayTypeFromEnvironment()
     }
 #endif
 
-#if defined(ANGLE_DEFAULT_D3D11) && defined(ANGLE_ENABLE_D3D9) && !ANGLE_DEFAULT_D3D11
+#if defined(ANGLE_DEFAULT_D3D11) && defined(ANGLE_ENABLE_D3D9) && defined(ANGLE_ENABLE_D3D11)
     return EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE;
 #elif defined(ANGLE_ENABLE_D3D11)
     return EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE;
