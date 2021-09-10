@@ -1354,8 +1354,10 @@ Error Display::restoreLostDevice()
             return EglContextLost();
         }
     }
-
-    return mImplementation->restoreLostDevice(this);
+    mInitialized = false;
+    ANGLE_TRY(mImplementation->restoreLostDevice(this));
+    mInitialized = true;
+    return NoError();
 }
 
 Error Display::destroySurface(Surface *surface)

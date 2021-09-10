@@ -289,6 +289,7 @@ egl::Error DisplayD3D::restoreLostDevice(const egl::Display *display)
 
     if (!mRenderer->resetDevice())
     {
+        terminate();
         return egl::EglBadAlloc();
     }
 
