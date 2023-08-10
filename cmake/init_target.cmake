@@ -16,7 +16,7 @@ function(init_target target_name) # init_target(my_target folder_name)
     else()
         # C++20 is not supported by bundled abseil-cpp yet:
         # https://github.com/abseil/abseil-cpp/issues/722
-        target_compile_features(${target_name} PUBLIC cxx_std_17)
+        target_compile_features(${target_name} PUBLIC cxx_std_20)
     endif()
     if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         set_target_properties(${target_name} PROPERTIES

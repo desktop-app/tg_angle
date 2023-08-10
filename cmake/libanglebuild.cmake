@@ -8,9 +8,9 @@ INTERFACE
     LIBANGLE_IMPLEMENTATION
     KHRONOS_STATIC
     ANGLE_FORCE_CONTEXT_CHECK_EVERY_CALL=1
-    ANGLE_ENABLE_OPENGL
-    ANGLE_ENABLE_OPENGL_DESKTOP
-    ANGLE_ENABLE_GLSL
+    # ANGLE_ENABLE_OPENGL
+    # ANGLE_ENABLE_GL_DESKTOP_BACKEND
+    # ANGLE_ENABLE_GLSL
     ANGLE_CAPTURE_ENABLED=0
     ANGLE_EXPORT=
     ANGLE_STATIC=1
@@ -54,9 +54,11 @@ endif()
 
 target_include_directories(libanglebuild
 INTERFACE
-    ${angle_loc}
     ${angle_include_loc}
-    ${angle_loc}/common/third_party/base
+    ${angle_loc}
+    ${angle_loc}/common
+    ${angle_loc}/common/base
+    ${angle_loc}/common/third_party/xxhash
     ${angle_loc}/third_party/khronos
     ${third_party_loc}/zlib/google
 )
