@@ -30,7 +30,7 @@ DispatchTableGL::DispatchTableGL() = default;
 void DispatchTableGL::initProcsDesktopGL(const gl::Version &version,
                                          const std::set<std::string> &extensions)
 {
-#if defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#if defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
     if (extensions.count("GL_ARB_ES2_compatibility") != 0)
     {
         ASSIGN("glClearDepthf", clearDepthf);
@@ -969,10 +969,7 @@ void DispatchTableGL::initProcsDesktopGL(const gl::Version &version,
         ASSIGN("glTextureParameterfvEXT", textureParameterfv);
         ASSIGN("glTextureParameteriEXT", textureParameteri);
         ASSIGN("glTextureParameterivEXT", textureParameteriv);
-        ASSIGN("glTextureStorage1DEXT", textureStorage1D);
-        ASSIGN("glTextureStorage2DEXT", textureStorage2D);
         ASSIGN("glTextureStorage2DMultisampleEXT", textureStorage2DMultisample);
-        ASSIGN("glTextureStorage3DEXT", textureStorage3D);
         ASSIGN("glTextureStorage3DMultisampleEXT", textureStorage3DMultisample);
         ASSIGN("glTextureSubImage1DEXT", textureSubImage1D);
         ASSIGN("glTextureSubImage2DEXT", textureSubImage2D);
@@ -994,6 +991,7 @@ void DispatchTableGL::initProcsDesktopGL(const gl::Version &version,
     if (extensions.count("GL_EXT_framebuffer_multisample") != 0)
     {
         ASSIGN("glRenderbufferStorageMultisampleEXT", renderbufferStorageMultisample);
+        ASSIGN("glRenderbufferStorageMultisampleEXT", renderbufferStorageMultisampleEXT);
     }
 
     if (extensions.count("GL_EXT_framebuffer_object") != 0)
@@ -1022,6 +1020,8 @@ void DispatchTableGL::initProcsDesktopGL(const gl::Version &version,
         ASSIGN("glBindFragDataLocationEXT", bindFragDataLocation);
         ASSIGN("glGetFragDataLocationEXT", getFragDataLocation);
         ASSIGN("glGetUniformuivEXT", getUniformuiv);
+        ASSIGN("glGetVertexAttribIivEXT", getVertexAttribIiv);
+        ASSIGN("glGetVertexAttribIuivEXT", getVertexAttribIuiv);
         ASSIGN("glUniform1uiEXT", uniform1ui);
         ASSIGN("glUniform1uivEXT", uniform1uiv);
         ASSIGN("glUniform2uiEXT", uniform2ui);
@@ -1030,6 +1030,27 @@ void DispatchTableGL::initProcsDesktopGL(const gl::Version &version,
         ASSIGN("glUniform3uivEXT", uniform3uiv);
         ASSIGN("glUniform4uiEXT", uniform4ui);
         ASSIGN("glUniform4uivEXT", uniform4uiv);
+        ASSIGN("glVertexAttribI1iEXT", vertexAttribI1i);
+        ASSIGN("glVertexAttribI1ivEXT", vertexAttribI1iv);
+        ASSIGN("glVertexAttribI1uiEXT", vertexAttribI1ui);
+        ASSIGN("glVertexAttribI1uivEXT", vertexAttribI1uiv);
+        ASSIGN("glVertexAttribI2iEXT", vertexAttribI2i);
+        ASSIGN("glVertexAttribI2ivEXT", vertexAttribI2iv);
+        ASSIGN("glVertexAttribI2uiEXT", vertexAttribI2ui);
+        ASSIGN("glVertexAttribI2uivEXT", vertexAttribI2uiv);
+        ASSIGN("glVertexAttribI3iEXT", vertexAttribI3i);
+        ASSIGN("glVertexAttribI3ivEXT", vertexAttribI3iv);
+        ASSIGN("glVertexAttribI3uiEXT", vertexAttribI3ui);
+        ASSIGN("glVertexAttribI3uivEXT", vertexAttribI3uiv);
+        ASSIGN("glVertexAttribI4bvEXT", vertexAttribI4bv);
+        ASSIGN("glVertexAttribI4iEXT", vertexAttribI4i);
+        ASSIGN("glVertexAttribI4ivEXT", vertexAttribI4iv);
+        ASSIGN("glVertexAttribI4svEXT", vertexAttribI4sv);
+        ASSIGN("glVertexAttribI4ubvEXT", vertexAttribI4ubv);
+        ASSIGN("glVertexAttribI4uiEXT", vertexAttribI4ui);
+        ASSIGN("glVertexAttribI4uivEXT", vertexAttribI4uiv);
+        ASSIGN("glVertexAttribI4usvEXT", vertexAttribI4usv);
+        ASSIGN("glVertexAttribIPointerEXT", vertexAttribIPointer);
     }
 
     if (extensions.count("GL_EXT_point_parameters") != 0)
@@ -1918,7 +1939,7 @@ void DispatchTableGL::initProcsDesktopGL(const gl::Version &version,
         ASSIGN("glVertexArrayVertexBuffer", vertexArrayVertexBuffer);
         ASSIGN("glVertexArrayVertexBuffers", vertexArrayVertexBuffers);
     }
-#endif  // defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#endif  // defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
 }
 
 void DispatchTableGL::initProcsGLES(const gl::Version &version,
@@ -2037,7 +2058,9 @@ void DispatchTableGL::initProcsGLES(const gl::Version &version,
 
     if (extensions.count("GL_EXT_multisampled_render_to_texture") != 0)
     {
+        ASSIGN("glFramebufferTexture2DMultisampleEXT", framebufferTexture2DMultisampleEXT);
         ASSIGN("glRenderbufferStorageMultisampleEXT", renderbufferStorageMultisample);
+        ASSIGN("glRenderbufferStorageMultisampleEXT", renderbufferStorageMultisampleEXT);
     }
 
     if (extensions.count("GL_EXT_multiview_draw_buffers") != 0)
@@ -2094,19 +2117,15 @@ void DispatchTableGL::initProcsGLES(const gl::Version &version,
         ASSIGN("glTexBufferRangeEXT", texBufferRangeEXT);
     }
 
-    if (extensions.count("GL_EXT_texture_storage") != 0)
-    {
-        ASSIGN("glTexStorage1DEXT", texStorage1D);
-        ASSIGN("glTexStorage2DEXT", texStorage2D);
-        ASSIGN("glTexStorage3DEXT", texStorage3D);
-        ASSIGN("glTextureStorage1DEXT", textureStorage1D);
-        ASSIGN("glTextureStorage2DEXT", textureStorage2D);
-        ASSIGN("glTextureStorage3DEXT", textureStorage3D);
-    }
-
     if (extensions.count("GL_EXT_texture_view") != 0)
     {
         ASSIGN("glTextureViewEXT", textureView);
+    }
+
+    if (extensions.count("GL_IMG_multisampled_render_to_texture") != 0)
+    {
+        ASSIGN("glFramebufferTexture2DMultisampleIMG", framebufferTexture2DMultisampleIMG);
+        ASSIGN("glRenderbufferStorageMultisampleIMG", renderbufferStorageMultisampleIMG);
     }
 
     if (extensions.count("GL_KHR_debug") != 0)
@@ -2136,6 +2155,11 @@ void DispatchTableGL::initProcsGLES(const gl::Version &version,
     if (extensions.count("GL_NV_framebuffer_blit") != 0)
     {
         ASSIGN("glBlitFramebufferNV", blitFramebufferNV);
+    }
+
+    if (extensions.count("GL_NV_polygon_mode") != 0)
+    {
+        ASSIGN("glPolygonModeNV", polygonModeNV);
     }
 
     if (extensions.count("GL_OES_EGL_image") != 0)
@@ -2702,6 +2726,11 @@ void DispatchTableGL::initProcsSharedExtensions(const std::set<std::string> &ext
         ASSIGN("glMultiDrawElementsEXT", multiDrawElements);
     }
 
+    if (extensions.count("GL_EXT_polygon_offset_clamp") != 0)
+    {
+        ASSIGN("glPolygonOffsetClampEXT", polygonOffsetClampEXT);
+    }
+
     if (extensions.count("GL_EXT_semaphore") != 0)
     {
         ASSIGN("glDeleteSemaphoresEXT", deleteSemaphoresEXT);
@@ -2774,9 +2803,29 @@ void DispatchTableGL::initProcsSharedExtensions(const std::set<std::string> &ext
         ASSIGN("glValidateProgramPipelineEXT", validateProgramPipeline);
     }
 
+    if (extensions.count("GL_EXT_shader_framebuffer_fetch_non_coherent") != 0)
+    {
+        ASSIGN("glFramebufferFetchBarrierEXT", framebufferFetchBarrierEXT);
+    }
+
+    if (extensions.count("GL_EXT_texture_storage") != 0)
+    {
+        ASSIGN("glTexStorage1DEXT", texStorage1D);
+        ASSIGN("glTexStorage2DEXT", texStorage2D);
+        ASSIGN("glTexStorage3DEXT", texStorage3D);
+        ASSIGN("glTextureStorage1DEXT", textureStorage1D);
+        ASSIGN("glTextureStorage2DEXT", textureStorage2D);
+        ASSIGN("glTextureStorage3DEXT", textureStorage3D);
+    }
+
     if (extensions.count("GL_KHR_parallel_shader_compile") != 0)
     {
         ASSIGN("glMaxShaderCompilerThreadsKHR", maxShaderCompilerThreadsKHR);
+    }
+
+    if (extensions.count("GL_MESA_framebuffer_flip_y") != 0)
+    {
+        ASSIGN("glFramebufferParameteriMESA", framebufferParameteriMESA);
     }
 
     if (extensions.count("GL_NV_fence") != 0)
@@ -2810,7 +2859,7 @@ void DispatchTableGL::initProcsSharedExtensions(const std::set<std::string> &ext
 void DispatchTableGL::initProcsDesktopGLNULL(const gl::Version &version,
                                              const std::set<std::string> &extensions)
 {
-#    if defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#    if defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
     if (extensions.count("GL_ARB_ES2_compatibility") != 0)
     {
         clearDepthf              = &glClearDepthfNULL;
@@ -3747,10 +3796,7 @@ void DispatchTableGL::initProcsDesktopGLNULL(const gl::Version &version,
         textureParameterfv                       = &glTextureParameterfvNULL;
         textureParameteri                        = &glTextureParameteriNULL;
         textureParameteriv                       = &glTextureParameterivNULL;
-        textureStorage1D                         = &glTextureStorage1DNULL;
-        textureStorage2D                         = &glTextureStorage2DNULL;
         textureStorage2DMultisample              = &glTextureStorage2DMultisampleNULL;
-        textureStorage3D                         = &glTextureStorage3DNULL;
         textureStorage3DMultisample              = &glTextureStorage3DMultisampleNULL;
         textureSubImage1D                        = &glTextureSubImage1DNULL;
         textureSubImage2D                        = &glTextureSubImage2DNULL;
@@ -3771,7 +3817,8 @@ void DispatchTableGL::initProcsDesktopGLNULL(const gl::Version &version,
 
     if (extensions.count("GL_EXT_framebuffer_multisample") != 0)
     {
-        renderbufferStorageMultisample = &glRenderbufferStorageMultisampleNULL;
+        renderbufferStorageMultisample    = &glRenderbufferStorageMultisampleNULL;
+        renderbufferStorageMultisampleEXT = &glRenderbufferStorageMultisampleEXTNULL;
     }
 
     if (extensions.count("GL_EXT_framebuffer_object") != 0)
@@ -3800,6 +3847,8 @@ void DispatchTableGL::initProcsDesktopGLNULL(const gl::Version &version,
         bindFragDataLocation = &glBindFragDataLocationNULL;
         getFragDataLocation  = &glGetFragDataLocationNULL;
         getUniformuiv        = &glGetUniformuivNULL;
+        getVertexAttribIiv   = &glGetVertexAttribIivNULL;
+        getVertexAttribIuiv  = &glGetVertexAttribIuivNULL;
         uniform1ui           = &glUniform1uiNULL;
         uniform1uiv          = &glUniform1uivNULL;
         uniform2ui           = &glUniform2uiNULL;
@@ -3808,6 +3857,27 @@ void DispatchTableGL::initProcsDesktopGLNULL(const gl::Version &version,
         uniform3uiv          = &glUniform3uivNULL;
         uniform4ui           = &glUniform4uiNULL;
         uniform4uiv          = &glUniform4uivNULL;
+        vertexAttribI1i      = &glVertexAttribI1iNULL;
+        vertexAttribI1iv     = &glVertexAttribI1ivNULL;
+        vertexAttribI1ui     = &glVertexAttribI1uiNULL;
+        vertexAttribI1uiv    = &glVertexAttribI1uivNULL;
+        vertexAttribI2i      = &glVertexAttribI2iNULL;
+        vertexAttribI2iv     = &glVertexAttribI2ivNULL;
+        vertexAttribI2ui     = &glVertexAttribI2uiNULL;
+        vertexAttribI2uiv    = &glVertexAttribI2uivNULL;
+        vertexAttribI3i      = &glVertexAttribI3iNULL;
+        vertexAttribI3iv     = &glVertexAttribI3ivNULL;
+        vertexAttribI3ui     = &glVertexAttribI3uiNULL;
+        vertexAttribI3uiv    = &glVertexAttribI3uivNULL;
+        vertexAttribI4bv     = &glVertexAttribI4bvNULL;
+        vertexAttribI4i      = &glVertexAttribI4iNULL;
+        vertexAttribI4iv     = &glVertexAttribI4ivNULL;
+        vertexAttribI4sv     = &glVertexAttribI4svNULL;
+        vertexAttribI4ubv    = &glVertexAttribI4ubvNULL;
+        vertexAttribI4ui     = &glVertexAttribI4uiNULL;
+        vertexAttribI4uiv    = &glVertexAttribI4uivNULL;
+        vertexAttribI4usv    = &glVertexAttribI4usvNULL;
+        vertexAttribIPointer = &glVertexAttribIPointerNULL;
     }
 
     if (extensions.count("GL_EXT_point_parameters") != 0)
@@ -4695,7 +4765,7 @@ void DispatchTableGL::initProcsDesktopGLNULL(const gl::Version &version,
         vertexArrayVertexBuffer                  = &glVertexArrayVertexBufferNULL;
         vertexArrayVertexBuffers                 = &glVertexArrayVertexBuffersNULL;
     }
-#    endif  // defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#    endif  // defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
 }
 
 void DispatchTableGL::initProcsGLESNULL(const gl::Version &version,
@@ -4814,7 +4884,9 @@ void DispatchTableGL::initProcsGLESNULL(const gl::Version &version,
 
     if (extensions.count("GL_EXT_multisampled_render_to_texture") != 0)
     {
-        renderbufferStorageMultisample = &glRenderbufferStorageMultisampleNULL;
+        framebufferTexture2DMultisampleEXT = &glFramebufferTexture2DMultisampleEXTNULL;
+        renderbufferStorageMultisample     = &glRenderbufferStorageMultisampleNULL;
+        renderbufferStorageMultisampleEXT  = &glRenderbufferStorageMultisampleEXTNULL;
     }
 
     if (extensions.count("GL_EXT_multiview_draw_buffers") != 0)
@@ -4871,19 +4943,15 @@ void DispatchTableGL::initProcsGLESNULL(const gl::Version &version,
         texBufferRangeEXT = &glTexBufferRangeEXTNULL;
     }
 
-    if (extensions.count("GL_EXT_texture_storage") != 0)
-    {
-        texStorage1D     = &glTexStorage1DNULL;
-        texStorage2D     = &glTexStorage2DNULL;
-        texStorage3D     = &glTexStorage3DNULL;
-        textureStorage1D = &glTextureStorage1DNULL;
-        textureStorage2D = &glTextureStorage2DNULL;
-        textureStorage3D = &glTextureStorage3DNULL;
-    }
-
     if (extensions.count("GL_EXT_texture_view") != 0)
     {
         textureView = &glTextureViewNULL;
+    }
+
+    if (extensions.count("GL_IMG_multisampled_render_to_texture") != 0)
+    {
+        framebufferTexture2DMultisampleIMG = &glFramebufferTexture2DMultisampleIMGNULL;
+        renderbufferStorageMultisampleIMG  = &glRenderbufferStorageMultisampleIMGNULL;
     }
 
     if (extensions.count("GL_KHR_debug") != 0)
@@ -4913,6 +4981,11 @@ void DispatchTableGL::initProcsGLESNULL(const gl::Version &version,
     if (extensions.count("GL_NV_framebuffer_blit") != 0)
     {
         blitFramebufferNV = &glBlitFramebufferNVNULL;
+    }
+
+    if (extensions.count("GL_NV_polygon_mode") != 0)
+    {
+        polygonModeNV = &glPolygonModeNVNULL;
     }
 
     if (extensions.count("GL_OES_EGL_image") != 0)
@@ -5479,6 +5552,11 @@ void DispatchTableGL::initProcsSharedExtensionsNULL(const std::set<std::string> 
         multiDrawElements = &glMultiDrawElementsNULL;
     }
 
+    if (extensions.count("GL_EXT_polygon_offset_clamp") != 0)
+    {
+        polygonOffsetClampEXT = &glPolygonOffsetClampEXTNULL;
+    }
+
     if (extensions.count("GL_EXT_semaphore") != 0)
     {
         deleteSemaphoresEXT           = &glDeleteSemaphoresEXTNULL;
@@ -5551,9 +5629,29 @@ void DispatchTableGL::initProcsSharedExtensionsNULL(const std::set<std::string> 
         validateProgramPipeline   = &glValidateProgramPipelineNULL;
     }
 
+    if (extensions.count("GL_EXT_shader_framebuffer_fetch_non_coherent") != 0)
+    {
+        framebufferFetchBarrierEXT = &glFramebufferFetchBarrierEXTNULL;
+    }
+
+    if (extensions.count("GL_EXT_texture_storage") != 0)
+    {
+        texStorage1D     = &glTexStorage1DNULL;
+        texStorage2D     = &glTexStorage2DNULL;
+        texStorage3D     = &glTexStorage3DNULL;
+        textureStorage1D = &glTextureStorage1DNULL;
+        textureStorage2D = &glTextureStorage2DNULL;
+        textureStorage3D = &glTextureStorage3DNULL;
+    }
+
     if (extensions.count("GL_KHR_parallel_shader_compile") != 0)
     {
         maxShaderCompilerThreadsKHR = &glMaxShaderCompilerThreadsKHRNULL;
+    }
+
+    if (extensions.count("GL_MESA_framebuffer_flip_y") != 0)
+    {
+        framebufferParameteriMESA = &glFramebufferParameteriMESANULL;
     }
 
     if (extensions.count("GL_NV_fence") != 0)

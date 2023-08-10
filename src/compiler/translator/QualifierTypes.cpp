@@ -160,9 +160,10 @@ bool HasRepeatingQualifiers(const TTypeQualifierBuilder::QualifierSequence &qual
             }
             case QtInterpolation:
             {
-                // 'centroid' is treated as a storage qualifier
-                // 'flat centroid' will be squashed to 'flat'
+                // 'centroid' and 'sample' are treated as storage qualifiers
+                // 'flat centroid' and 'flat sample' will be squashed to 'flat'
                 // 'smooth centroid' will be squashed to 'centroid'
+                // 'smooth sample' will be squashed to 'sample'
                 if (interpolationFound)
                 {
                     *errorMessage = kInterpolationMultipleTimes;
@@ -371,6 +372,9 @@ bool JoinVariableStorageQualifier(TQualifier *joinedQualifier, TQualifier storag
                 case EvqCentroid:
                     *joinedQualifier = EvqCentroid;
                     break;
+                case EvqSample:
+                    *joinedQualifier = EvqSample;
+                    break;
                 case EvqVertexOut:
                 case EvqGeometryOut:
                 case EvqTessControlOut:
@@ -393,6 +397,7 @@ bool JoinVariableStorageQualifier(TQualifier *joinedQualifier, TQualifier storag
             switch (storageQualifier)
             {
                 case EvqCentroid:
+                case EvqSample:
                     *joinedQualifier = EvqFlat;
                     break;
                 case EvqVertexOut:
@@ -417,7 +422,10 @@ bool JoinVariableStorageQualifier(TQualifier *joinedQualifier, TQualifier storag
             switch (storageQualifier)
             {
                 case EvqCentroid:
-                    *joinedQualifier = EvqNoPerspective;
+                    *joinedQualifier = EvqNoPerspectiveCentroid;
+                    break;
+                case EvqSample:
+                    *joinedQualifier = EvqNoPerspectiveSample;
                     break;
                 case EvqVertexOut:
                 case EvqGeometryOut:
@@ -478,6 +486,48 @@ bool JoinVariableStorageQualifier(TQualifier *joinedQualifier, TQualifier storag
             }
             break;
         }
+        case EvqNoPerspectiveCentroid:
+        {
+            switch (storageQualifier)
+            {
+                case EvqVertexOut:
+                case EvqGeometryOut:
+                case EvqTessControlOut:
+                case EvqTessEvaluationOut:
+                    *joinedQualifier = EvqNoPerspectiveCentroidOut;
+                    break;
+                case EvqFragmentIn:
+                case EvqGeometryIn:
+                case EvqTessControlIn:
+                case EvqTessEvaluationIn:
+                    *joinedQualifier = EvqNoPerspectiveCentroidIn;
+                    break;
+                default:
+                    return false;
+            }
+            break;
+        }
+        case EvqNoPerspectiveSample:
+        {
+            switch (storageQualifier)
+            {
+                case EvqVertexOut:
+                case EvqGeometryOut:
+                case EvqTessControlOut:
+                case EvqTessEvaluationOut:
+                    *joinedQualifier = EvqNoPerspectiveSampleOut;
+                    break;
+                case EvqFragmentIn:
+                case EvqGeometryIn:
+                case EvqTessControlIn:
+                case EvqTessEvaluationIn:
+                    *joinedQualifier = EvqNoPerspectiveSampleIn;
+                    break;
+                default:
+                    return false;
+            }
+            break;
+        }
         case EvqPatch:
         {
             switch (storageQualifier)
@@ -511,8 +561,8 @@ bool JoinParameterStorageQualifier(TQualifier *joinedQualifier, TQualifier stora
         {
             switch (storageQualifier)
             {
-                case EvqIn:
-                    *joinedQualifier = EvqConstReadOnly;
+                case EvqParamIn:
+                    *joinedQualifier = EvqParamConst;
                     break;
                 default:
                     return false;
@@ -630,6 +680,7 @@ TTypeQualifier GetVariableTypeQualifierFromSortedSequence(
 }
 
 TTypeQualifier GetParameterTypeQualifierFromSortedSequence(
+    TBasicType parameterBasicType,
     const TTypeQualifierBuilder::QualifierSequence &sortedSequence,
     TDiagnostics *diagnostics)
 {
@@ -641,7 +692,6 @@ TTypeQualifier GetParameterTypeQualifierFromSortedSequence(
         switch (qualifier->getType())
         {
             case QtInvariant:
-            case QtPrecise:
             case QtInterpolation:
             case QtLayout:
                 break;
@@ -661,6 +711,10 @@ TTypeQualifier GetParameterTypeQualifierFromSortedSequence(
                     static_cast<const TPrecisionQualifierWrapper *>(qualifier)->getQualifier();
                 ASSERT(typeQualifier.precision != EbpUndefined);
                 break;
+            case QtPrecise:
+                isQualifierValid      = true;
+                typeQualifier.precise = true;
+                break;
             default:
                 UNREACHABLE();
         }
@@ -675,17 +729,19 @@ TTypeQualifier GetParameterTypeQualifierFromSortedSequence(
 
     switch (typeQualifier.qualifier)
     {
-        case EvqIn:
-        case EvqConstReadOnly:  // const in
-        case EvqOut:
-        case EvqInOut:
+        case EvqParamIn:
+        case EvqParamConst:  // const in
+        case EvqParamOut:
+        case EvqParamInOut:
             break;
         case EvqConst:
-            typeQualifier.qualifier = EvqConstReadOnly;
+            // Opaque parameters can only be |in|.  |const| is allowed, but is meaningless and is
+            // dropped.
+            typeQualifier.qualifier = IsOpaqueType(parameterBasicType) ? EvqParamIn : EvqParamConst;
             break;
         case EvqTemporary:
-            // no qualifier has been specified, set it to EvqIn which is the default
-            typeQualifier.qualifier = EvqIn;
+            // no qualifier has been specified, set it to EvqParamIn which is the default
+            typeQualifier.qualifier = EvqParamIn;
             break;
         default:
             diagnostics->error(sortedSequence[0]->getLine(), "Invalid parameter qualifier ",
@@ -706,6 +762,15 @@ TLayoutQualifier JoinLayoutQualifiers(TLayoutQualifier leftQualifier,
     {
         joinedQualifier.location = rightQualifier.location;
         ++joinedQualifier.locationsSpecified;
+    }
+    if (rightQualifier.depth != EdUnspecified)
+    {
+        if (joinedQualifier.depth != EdUnspecified)
+        {
+            diagnostics->error(rightQualifierLocation, "Cannot have multiple depth qualifiers",
+                               getDepthString(rightQualifier.depth));
+        }
+        joinedQualifier.depth = rightQualifier.depth;
     }
     if (rightQualifier.yuv != false)
     {
@@ -850,6 +915,11 @@ TLayoutQualifier JoinLayoutQualifiers(TLayoutQualifier leftQualifier,
         joinedQualifier.index = rightQualifier.index;
     }
 
+    if (rightQualifier.advancedBlendEquations.any())
+    {
+        joinedQualifier.advancedBlendEquations |= rightQualifier.advancedBlendEquations;
+    }
+
     return joinedQualifier;
 }
 
@@ -875,9 +945,9 @@ unsigned int TLayoutQualifierWrapper::getRank() const
 
 unsigned int TStorageQualifierWrapper::getRank() const
 {
-    // Force the 'centroid' auxilary storage qualifier to be always first among all storage
-    // qualifiers.
-    if (mStorageQualifier == EvqCentroid)
+    // Force the 'centroid' and 'sample' auxilary storage qualifiers
+    // to be always first among all storage qualifiers.
+    if (mStorageQualifier == EvqCentroid || mStorageQualifier == EvqSample)
     {
         return 4u;
     }
@@ -942,7 +1012,8 @@ bool TTypeQualifierBuilder::checkSequenceIsValid(TDiagnostics *diagnostics) cons
     return true;
 }
 
-TTypeQualifier TTypeQualifierBuilder::getParameterTypeQualifier(TDiagnostics *diagnostics) const
+TTypeQualifier TTypeQualifierBuilder::getParameterTypeQualifier(TBasicType parameterBasicType,
+                                                                TDiagnostics *diagnostics) const
 {
     ASSERT(IsInvariantCorrect(mQualifiers));
     ASSERT(static_cast<const TStorageQualifierWrapper *>(mQualifiers[0])->getQualifier() ==
@@ -961,9 +1032,11 @@ TTypeQualifier TTypeQualifierBuilder::getParameterTypeQualifier(TDiagnostics *di
         // Copy the qualifier sequence so that we can sort them.
         QualifierSequence sortedQualifierSequence = mQualifiers;
         SortSequence(sortedQualifierSequence);
-        return GetParameterTypeQualifierFromSortedSequence(sortedQualifierSequence, diagnostics);
+        return GetParameterTypeQualifierFromSortedSequence(parameterBasicType,
+                                                           sortedQualifierSequence, diagnostics);
     }
-    return GetParameterTypeQualifierFromSortedSequence(mQualifiers, diagnostics);
+    return GetParameterTypeQualifierFromSortedSequence(parameterBasicType, mQualifiers,
+                                                       diagnostics);
 }
 
 TTypeQualifier TTypeQualifierBuilder::getVariableTypeQualifier(TDiagnostics *diagnostics) const

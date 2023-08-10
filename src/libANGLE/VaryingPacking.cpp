@@ -11,6 +11,7 @@
 
 #include "libANGLE/VaryingPacking.h"
 
+#include "common/CompiledShaderState.h"
 #include "common/utilities.h"
 #include "libANGLE/Program.h"
 #include "libANGLE/ProgramExecutable.h"
@@ -845,6 +846,11 @@ bool VaryingPacking::collectAndPackUserVaryings(gl::InfoLog &infoLog,
         if (isActiveBuiltInInput)
         {
             mActiveOutputBuiltIns[ref.frontShaderStage].push_back(input->name);
+            // Keep track of members of builtins, such as gl_out[].gl_Position, too.
+            for (sh::ShaderVariable field : input->fields)
+            {
+                mActiveOutputBuiltIns[ref.frontShaderStage].push_back(field.name);
+            }
         }
 
         // Only pack statically used varyings that have a matched input or output, plus special
@@ -859,13 +865,19 @@ bool VaryingPacking::collectAndPackUserVaryings(gl::InfoLog &infoLog,
         bool matchedInputOutputStaticUse = (input && output && output->staticUse);
         bool activeBuiltIn               = (isActiveBuiltInInput || isActiveBuiltInOutput);
 
+        // Output variable in TCS can be read as input in another invocation by barrier.
+        // See section 11.2.1.2.4 Tessellation Control Shader Execution Order in OpenGL ES 3.2.
+        bool staticUseInTCS =
+            (input && input->staticUse && ref.frontShaderStage == ShaderType::TessControl);
+
         // Separable program requirements
         bool separableActiveInput  = (input && (input->active || !output));
         bool separableActiveOutput = (output && (output->active || !input));
         bool separableActiveVarying =
             (isSeparableProgram && (separableActiveInput || separableActiveOutput));
 
-        if (matchedInputOutputStaticUse || activeBuiltIn || separableActiveVarying)
+        if (matchedInputOutputStaticUse || activeBuiltIn || separableActiveVarying ||
+            staticUseInTCS)
         {
             const sh::ShaderVariable *varying = output ? output : input;
 
@@ -898,21 +910,27 @@ bool VaryingPacking::collectAndPackUserVaryings(gl::InfoLog &infoLog,
             collectTFVarying(tfVarying, ref, &uniqueFullNames);
         }
 
-        if (input && !input->isBuiltIn() &&
-            uniqueFullNames[ref.frontShaderStage].count(input->name) == 0)
+        if (input && !input->isBuiltIn())
         {
-            mInactiveVaryingMappedNames[ref.frontShaderStage].push_back(input->mappedName);
-            if (input->isShaderIOBlock)
+            if (uniqueFullNames[ref.frontShaderStage].count(input->name) == 0)
+            {
+                mInactiveVaryingMappedNames[ref.frontShaderStage].push_back(input->mappedName);
+            }
+            if (input->isShaderIOBlock &&
+                uniqueFullNames[ref.frontShaderStage].count(input->structOrBlockName) == 0)
             {
                 mInactiveVaryingMappedNames[ref.frontShaderStage].push_back(
                     input->mappedStructOrBlockName);
             }
         }
-        if (output && !output->isBuiltIn() &&
-            uniqueFullNames[ref.backShaderStage].count(output->name) == 0)
+        if (output && !output->isBuiltIn())
         {
-            mInactiveVaryingMappedNames[ref.backShaderStage].push_back(output->mappedName);
-            if (output->isShaderIOBlock)
+            if (uniqueFullNames[ref.backShaderStage].count(output->name) == 0)
+            {
+                mInactiveVaryingMappedNames[ref.backShaderStage].push_back(output->mappedName);
+            }
+            if (output->isShaderIOBlock &&
+                uniqueFullNames[ref.backShaderStage].count(output->structOrBlockName) == 0)
             {
                 mInactiveVaryingMappedNames[ref.backShaderStage].push_back(
                     output->mappedStructOrBlockName);
@@ -1005,8 +1023,6 @@ bool ProgramVaryingPacking::collectAndPackUserVaryings(InfoLog &infoLog,
     // Special case for start-after-vertex.
     if (frontShaderStage != ShaderType::Vertex)
     {
-        ASSERT(isSeparableProgram);
-
         ShaderType emulatedFrontShaderStage = ShaderType::Vertex;
         ShaderType backShaderStage          = frontShaderStage;
 
@@ -1051,8 +1067,6 @@ bool ProgramVaryingPacking::collectAndPackUserVaryings(InfoLog &infoLog,
     // Special case for stop-before-fragment.
     if (frontShaderStage != ShaderType::Fragment)
     {
-        ASSERT(isSeparableProgram);
-
         if (!mVaryingPackings[frontShaderStage].collectAndPackUserVaryings(
                 infoLog, GetMaxShaderOutputVectors(caps, frontShaderStage), packMode,
                 frontShaderStage, ShaderType::InvalidEnum, mergedVaryings, tfVaryings,
@@ -1068,27 +1082,22 @@ bool ProgramVaryingPacking::collectAndPackUserVaryings(InfoLog &infoLog,
     return true;
 }
 
-ProgramMergedVaryings GetMergedVaryingsFromShaders(const HasAttachedShaders &programOrPipeline,
-                                                   const ProgramExecutable &programExecutable)
+ProgramMergedVaryings GetMergedVaryingsFromLinkingVariables(
+    const LinkingVariables &linkingVariables)
 {
     ShaderType frontShaderType = ShaderType::InvalidEnum;
     ProgramMergedVaryings merged;
 
     for (ShaderType backShaderType : kAllGraphicsShaderTypes)
     {
-        Shader *backShader = programOrPipeline.getAttachedShader(backShaderType);
-
-        if (!backShader && !programExecutable.hasLinkedShaderStage(backShaderType))
+        if (!linkingVariables.isShaderStageUsedBitset[backShaderType])
         {
             continue;
         }
-
         const std::vector<sh::ShaderVariable> &backShaderOutputVaryings =
-            backShader ? backShader->getOutputVaryings()
-                       : programExecutable.getLinkedOutputVaryings(backShaderType);
+            linkingVariables.outputVaryings[backShaderType];
         const std::vector<sh::ShaderVariable> &backShaderInputVaryings =
-            backShader ? backShader->getInputVaryings()
-                       : programExecutable.getLinkedInputVaryings(backShaderType);
+            linkingVariables.inputVaryings[backShaderType];
 
         // Add outputs. These are always unmatched since we walk shader stages sequentially.
         for (const sh::ShaderVariable &frontVarying : backShaderOutputVaryings)

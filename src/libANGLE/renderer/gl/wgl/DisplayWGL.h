@@ -9,7 +9,6 @@
 #ifndef LIBANGLE_RENDERER_GL_WGL_DISPLAYWGL_H_
 #define LIBANGLE_RENDERER_GL_WGL_DISPLAYWGL_H_
 
-#include <thread>
 #include <unordered_map>
 
 #include "libANGLE/renderer/gl/DisplayGL.h"
@@ -118,7 +117,7 @@ class DisplayWGL : public DisplayGL
         HDC dc     = nullptr;
         HGLRC glrc = nullptr;
     };
-    angle::HashMap<std::thread::id, CurrentNativeContext> mCurrentNativeContexts;
+    angle::HashMap<uint64_t, CurrentNativeContext> mCurrentNativeContexts;
 
     HMODULE mOpenGLModule;
 
@@ -140,6 +139,7 @@ class DisplayWGL : public DisplayGL
     HMODULE mD3d11Module;
     HANDLE mD3D11DeviceHandle;
     ID3D11Device *mD3D11Device;
+    ID3D11Device1 *mD3D11Device1;
 
     struct D3DObjectHandle
     {

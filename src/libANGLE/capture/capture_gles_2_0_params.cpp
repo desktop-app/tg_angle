@@ -11,6 +11,7 @@
 #include "libANGLE/Context.h"
 #include "libANGLE/Shader.h"
 #include "libANGLE/formatutils.h"
+#include "libGLESv2/global_state.h"
 
 using namespace angle;
 
@@ -101,7 +102,7 @@ void CaptureDeleteBuffers_buffersPacked(const State &glState,
                                         const BufferID *buffers,
                                         ParamCapture *paramCapture)
 {
-    CaptureMemory(buffers, sizeof(BufferID) * n, paramCapture);
+    CaptureArray(buffers, n, paramCapture);
 }
 
 void CaptureDeleteFramebuffers_framebuffersPacked(const State &glState,
@@ -110,7 +111,7 @@ void CaptureDeleteFramebuffers_framebuffersPacked(const State &glState,
                                                   const FramebufferID *framebuffers,
                                                   ParamCapture *paramCapture)
 {
-    CaptureMemory(framebuffers, sizeof(FramebufferID) * n, paramCapture);
+    CaptureArray(framebuffers, n, paramCapture);
 }
 
 void CaptureDeleteRenderbuffers_renderbuffersPacked(const State &glState,
@@ -119,7 +120,7 @@ void CaptureDeleteRenderbuffers_renderbuffersPacked(const State &glState,
                                                     const RenderbufferID *renderbuffers,
                                                     ParamCapture *paramCapture)
 {
-    CaptureMemory(renderbuffers, sizeof(RenderbufferID) * n, paramCapture);
+    CaptureArray(renderbuffers, n, paramCapture);
 }
 
 void CaptureDeleteTextures_texturesPacked(const State &glState,
@@ -128,7 +129,7 @@ void CaptureDeleteTextures_texturesPacked(const State &glState,
                                           const TextureID *textures,
                                           ParamCapture *paramCapture)
 {
-    CaptureMemory(textures, sizeof(TextureID) * n, paramCapture);
+    CaptureArray(textures, n, paramCapture);
 }
 
 void CaptureDrawElements_indices(const State &glState,
@@ -447,7 +448,7 @@ void CaptureGetShaderInfoLog_infoLog(const State &glState,
 {
     gl::Shader *shaderObj = glState.getShaderProgramManagerForCapture().getShader(shader);
     ASSERT(shaderObj);
-    paramCapture->readBufferSizeBytes = shaderObj->getInfoLogLength() + 1;
+    paramCapture->readBufferSizeBytes = shaderObj->getInfoLogLength(GetValidGlobalContext()) + 1;
 }
 
 void CaptureGetShaderPrecisionFormat_range(const State &glState,
@@ -649,14 +650,7 @@ void CaptureShaderSource_string(const State &glState,
                                 const GLint *length,
                                 ParamCapture *paramCapture)
 {
-    for (GLsizei index = 0; index < count; ++index)
-    {
-        size_t len = ((length && length[index] >= 0) ? length[index] : strlen(string[index]));
-        // includes the '\0' suffix
-        std::vector<uint8_t> data(len + 1, 0);
-        memcpy(data.data(), string[index], len);
-        paramCapture->data.emplace_back(std::move(data));
-    }
+    CaptureShaderStrings(count, string, length, paramCapture);
 }
 
 void CaptureShaderSource_length(const State &glState,
@@ -698,6 +692,26 @@ void CaptureTexImage2D_pixels(const State &glState,
         return;
     }
 
+    // Because GL_HALF_FLOAT and GL_HALF_FLOAT_OES have different values, and the
+    // format table created by BuildInternalFormatInfoMap() and queried here
+    // uses GL_HALF_FLOAT_OES for legacy formats, we have to override the type here.
+    //
+    // BuildInternalFormatInfoMap() can't have entries of the same format for
+    // GL_HALF_FLOAT and GL_ALPHA_FLOAT_OES, and formats like R16F use GL_HALF_FLOAT,
+    // but legacy formats like ALPHA16F use GL_HALF_FLOAT_OES, so overriding
+    // GL_HALF_FLOAT only based on the GLES version, like it is done in
+    // getReadPixelsType, will not work, we also have to check the format when doing so.
+    //
+    // Better would be to actually use the (sized) internal format to do the lookup,
+    // but this doesn't work when calling this function from CaptureTexSubImage2D_pixels,
+    // because there the internal format is not known.
+
+    if (type == GL_HALF_FLOAT &&
+        (format == GL_ALPHA || format == GL_LUMINANCE || format == GL_LUMINANCE_ALPHA))
+    {
+        type = GL_HALF_FLOAT_OES;
+    }
+
     const gl::InternalFormat &internalFormatInfo = gl::GetInternalFormatInfo(format, type);
     const gl::PixelUnpackState &unpack           = glState.getUnpackState();
 
@@ -711,8 +725,16 @@ void CaptureTexImage2D_pixels(const State &glState,
     (void)internalFormatInfo.computeSkipBytes(type, srcRowPitch, srcDepthPitch, unpack, false,
                                               &srcSkipBytes);
 
-    size_t captureSize = srcRowPitch * height + srcSkipBytes;
-    CaptureMemory(pixels, captureSize, paramCapture);
+    // For the last row of pixels, we don't round up to the unpack alignment. This often affects
+    // 1x1 sized textures because they may be 1 or 2 bytes wide with an alignment of 4 bytes.
+    size_t allRowSizeMinusLastRowSize = height == 0 ? 0 : (srcRowPitch * (height - 1));
+    size_t lastRowSize                = width * internalFormatInfo.pixelBytes;
+    size_t captureSize                = allRowSizeMinusLastRowSize + lastRowSize + srcSkipBytes;
+
+    if (captureSize > 0)
+    {
+        CaptureMemory(pixels, captureSize, paramCapture);
+    }
 }
 
 void CaptureTexParameterfv_params(const State &glState,

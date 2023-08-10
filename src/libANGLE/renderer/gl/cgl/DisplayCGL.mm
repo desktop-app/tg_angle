@@ -6,28 +6,25 @@
 
 // DisplayCGL.mm: CGL implementation of egl::Display
 
-#include "common/platform.h"
+#import "libANGLE/renderer/gl/cgl/DisplayCGL.h"
 
-#if defined(ANGLE_PLATFORM_MACOS) || defined(ANGLE_PLATFORM_MACCATALYST)
+#import <Cocoa/Cocoa.h>
+#import <EGL/eglext.h>
+#import <dlfcn.h>
 
-#    include "libANGLE/renderer/gl/cgl/DisplayCGL.h"
-
-#    import <Cocoa/Cocoa.h>
-#    include <EGL/eglext.h>
-#    include <dlfcn.h>
-
-#    include "common/debug.h"
-#    include "common/gl/cgl/FunctionsCGL.h"
-#    include "gpu_info_util/SystemInfo.h"
-#    include "libANGLE/Display.h"
-#    include "libANGLE/Error.h"
-#    include "libANGLE/renderer/gl/cgl/ContextCGL.h"
-#    include "libANGLE/renderer/gl/cgl/DeviceCGL.h"
-#    include "libANGLE/renderer/gl/cgl/IOSurfaceSurfaceCGL.h"
-#    include "libANGLE/renderer/gl/cgl/PbufferSurfaceCGL.h"
-#    include "libANGLE/renderer/gl/cgl/RendererCGL.h"
-#    include "libANGLE/renderer/gl/cgl/WindowSurfaceCGL.h"
-#    include "platform/PlatformMethods.h"
+#import "common/debug.h"
+#import "common/gl/cgl/FunctionsCGL.h"
+#import "common/system_utils.h"
+#import "gpu_info_util/SystemInfo_internal.h"
+#import "libANGLE/Display.h"
+#import "libANGLE/Error.h"
+#import "libANGLE/renderer/gl/cgl/ContextCGL.h"
+#import "libANGLE/renderer/gl/cgl/DeviceCGL.h"
+#import "libANGLE/renderer/gl/cgl/IOSurfaceSurfaceCGL.h"
+#import "libANGLE/renderer/gl/cgl/PbufferSurfaceCGL.h"
+#import "libANGLE/renderer/gl/cgl/RendererCGL.h"
+#import "libANGLE/renderer/gl/cgl/WindowSurfaceCGL.h"
+#import "platform/PlatformMethods.h"
 
 namespace
 {
@@ -36,7 +33,7 @@ const char *kDefaultOpenGLDylibName =
     "/System/Library/Frameworks/OpenGL.framework/Libraries/libGL.dylib";
 const char *kFallbackOpenGLDylibName = "GL";
 
-}
+}  // namespace
 
 namespace rx
 {
@@ -50,9 +47,8 @@ using IORegistryGPUID = uint64_t;
 // Code from WebKit to set an OpenGL context to use a particular GPU by ID.
 // https://trac.webkit.org/browser/webkit/trunk/Source/WebCore/platform/graphics/cocoa/GraphicsContextGLOpenGLCocoa.mm
 // Used with permission.
-static void SetGPUByRegistryID(CGLContextObj contextObj,
-                               CGLPixelFormatObj pixelFormatObj,
-                               IORegistryGPUID preferredGPUID)
+static std::optional<GLint> GetVirtualScreenByRegistryID(CGLPixelFormatObj pixelFormatObj,
+                                                         IORegistryGPUID gpuID)
 {
     if (@available(macOS 10.13, *))
     {
@@ -62,51 +58,65 @@ static void SetGPUByRegistryID(CGLContextObj contextObj,
         // registryID. CGLSetVirtualScreen can then be used to tell OpenGL which GPU it should be
         // using.
 
-        if (!contextObj || !preferredGPUID)
-            return;
-
         GLint virtualScreenCount = 0;
         CGLError error = CGLDescribePixelFormat(pixelFormatObj, 0, kCGLPFAVirtualScreenCount,
                                                 &virtualScreenCount);
-        ASSERT(error == kCGLNoError);
-
-        GLint firstAcceleratedScreen = -1;
+        if (error != kCGLNoError)
+        {
+            NOTREACHED();
+            return std::nullopt;
+        }
 
         for (GLint virtualScreen = 0; virtualScreen < virtualScreenCount; ++virtualScreen)
         {
             GLint displayMask = 0;
             error = CGLDescribePixelFormat(pixelFormatObj, virtualScreen, kCGLPFADisplayMask,
                                            &displayMask);
-            ASSERT(error == kCGLNoError);
-
-            auto gpuID = angle::GetGpuIDFromOpenGLDisplayMask(displayMask);
-
-            if (gpuID == preferredGPUID)
+            if (error != kCGLNoError)
             {
-                error = CGLSetVirtualScreen(contextObj, virtualScreen);
-                ASSERT(error == kCGLNoError);
-                fprintf(stderr, "Context (%p) set to GPU with ID: (%lld).", contextObj, gpuID);
-                return;
+                NOTREACHED();
+                return std::nullopt;
             }
 
-            if (firstAcceleratedScreen < 0)
+            auto virtualScreenGPUID = angle::GetGpuIDFromOpenGLDisplayMask(displayMask);
+            if (virtualScreenGPUID == gpuID)
             {
-                GLint isAccelerated = 0;
-                error = CGLDescribePixelFormat(pixelFormatObj, virtualScreen, kCGLPFAAccelerated,
-                                               &isAccelerated);
-                ASSERT(error == kCGLNoError);
-                if (isAccelerated)
-                    firstAcceleratedScreen = virtualScreen;
+                return virtualScreen;
             }
-        }
-
-        // No registryID match found; set to first hardware-accelerated virtual screen.
-        if (firstAcceleratedScreen >= 0)
-        {
-            error = CGLSetVirtualScreen(contextObj, firstAcceleratedScreen);
-            ASSERT(error == kCGLNoError);
         }
     }
+    return std::nullopt;
+}
+
+static std::optional<GLint> GetFirstAcceleratedVirtualScreen(CGLPixelFormatObj pixelFormatObj)
+{
+    if (@available(macOS 10.13, *))
+    {
+        GLint virtualScreenCount = 0;
+        CGLError error = CGLDescribePixelFormat(pixelFormatObj, 0, kCGLPFAVirtualScreenCount,
+                                                &virtualScreenCount);
+        if (error != kCGLNoError)
+        {
+            NOTREACHED();
+            return std::nullopt;
+        }
+        for (GLint virtualScreen = 0; virtualScreen < virtualScreenCount; ++virtualScreen)
+        {
+            GLint isAccelerated = 0;
+            error = CGLDescribePixelFormat(pixelFormatObj, virtualScreen, kCGLPFAAccelerated,
+                                           &isAccelerated);
+            if (error != kCGLNoError)
+            {
+                NOTREACHED();
+                return std::nullopt;
+            }
+            if (isAccelerated)
+            {
+                return virtualScreen;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 }  // anonymous namespace
@@ -196,15 +206,33 @@ egl::Error DisplayCGL::initialize(egl::Display *display)
 
     if (mSupportsGPUSwitching)
     {
-        // Determine the currently active GPU on the system.
-        mCurrentGPUID = angle::GetGpuIDFromDisplayID(kCGDirectMainDisplay);
+        auto gpuIndex = info.getPreferredGPUIndex();
+        if (gpuIndex)
+        {
+            auto gpuID         = info.gpus[*gpuIndex].systemDeviceId;
+            auto virtualScreen = GetVirtualScreenByRegistryID(mPixelFormat, gpuID);
+            if (virtualScreen)
+            {
+                CGLError error = CGLSetVirtualScreen(mContext, *virtualScreen);
+                ASSERT(error == kCGLNoError);
+                if (error == kCGLNoError)
+                {
+                    mCurrentGPUID = gpuID;
+                }
+            }
+        }
+        if (mCurrentGPUID == 0)
+        {
+            // Determine the currently active GPU on the system.
+            mCurrentGPUID = angle::GetGpuIDFromDisplayID(kCGDirectMainDisplay);
+        }
     }
 
     if (CGLSetCurrentContext(mContext) != kCGLNoError)
     {
         return egl::EglNotInitialized() << "Could not make the CGL context current.";
     }
-    mThreadsWithCurrentContext.insert(std::this_thread::get_id());
+    mThreadsWithCurrentContext.insert(angle::GetCurrentThreadUniqueId());
 
     // There is no equivalent getProcAddress in CGL so we open the dylib directly
     void *handle = dlopen(kDefaultOpenGLDylibName, RTLD_NOW);
@@ -266,7 +294,7 @@ egl::Error DisplayCGL::prepareForCall()
     {
         return egl::EglNotInitialized() << "Context not allocated.";
     }
-    auto threadId = std::this_thread::get_id();
+    auto threadId = angle::GetCurrentThreadUniqueId();
     if (mDeviceContextIsVolatile ||
         mThreadsWithCurrentContext.find(threadId) == mThreadsWithCurrentContext.end())
     {
@@ -282,7 +310,7 @@ egl::Error DisplayCGL::prepareForCall()
 egl::Error DisplayCGL::releaseThread()
 {
     ASSERT(mContext);
-    auto threadId = std::this_thread::get_id();
+    auto threadId = angle::GetCurrentThreadUniqueId();
     if (mThreadsWithCurrentContext.find(threadId) != mThreadsWithCurrentContext.end())
     {
         if (CGLSetCurrentContext(nullptr) != kCGLNoError)
@@ -325,7 +353,7 @@ SurfaceImpl *DisplayCGL::createPbufferFromClientBuffer(const egl::SurfaceState &
 {
     ASSERT(buftype == EGL_IOSURFACE_ANGLE);
 
-    return new IOSurfaceSurfaceCGL(state, mContext, clientBuffer, attribs);
+    return new IOSurfaceSurfaceCGL(state, getRenderer(), mContext, clientBuffer, attribs);
 }
 
 SurfaceImpl *DisplayCGL::createPixmapSurface(const egl::SurfaceState &state,
@@ -441,7 +469,7 @@ egl::Error DisplayCGL::restoreLostDevice(const egl::Display *display)
 
 bool DisplayCGL::isValidNativeWindow(EGLNativeWindowType window) const
 {
-    NSObject *layer = (__bridge NSObject *)window;
+    NSObject *layer = reinterpret_cast<NSObject *>(window);
     return [layer isKindOfClass:[CALayer class]];
 }
 
@@ -472,8 +500,9 @@ CGLPixelFormatObj DisplayCGL::getCGLPixelFormat() const
 
 void DisplayCGL::generateExtensions(egl::DisplayExtensions *outExtensions) const
 {
-    outExtensions->iosurfaceClientBuffer = true;
-    outExtensions->surfacelessContext    = true;
+    outExtensions->iosurfaceClientBuffer  = true;
+    outExtensions->surfacelessContext     = true;
+    outExtensions->waitUntilWorkScheduled = true;
 
     // Contexts are virtualized so textures and semaphores can be shared globally
     outExtensions->displayTextureShareGroup   = true;
@@ -501,6 +530,15 @@ egl::Error DisplayCGL::waitClient(const gl::Context *context)
 egl::Error DisplayCGL::waitNative(const gl::Context *context, EGLint engine)
 {
     // TODO(cwallez) UNIMPLEMENTED()
+    return egl::NoError();
+}
+
+egl::Error DisplayCGL::waitUntilWorkScheduled()
+{
+    for (auto context : mState.contextMap)
+    {
+        context.second->flush();
+    }
     return egl::NoError();
 }
 
@@ -650,22 +688,54 @@ egl::Error DisplayCGL::handleGPUSwitch()
         uint64_t gpuID = angle::GetGpuIDFromDisplayID(kCGDirectMainDisplay);
         if (gpuID != mCurrentGPUID)
         {
-            SetGPUByRegistryID(mContext, mPixelFormat, gpuID);
-            // Performing the above operation seems to need a call to CGLSetCurrentContext to make
-            // the context work properly again. Failing to do this returns null strings for
-            // GL_VENDOR and GL_RENDERER.
-            CGLUpdateContext(mContext);
-            CGLSetCurrentContext(mContext);
-            onStateChange(angle::SubjectMessage::SubjectChanged);
-            mCurrentGPUID = gpuID;
-
-            mRenderer->handleGPUSwitch();
+            auto virtualScreen = GetVirtualScreenByRegistryID(mPixelFormat, gpuID);
+            if (!virtualScreen)
+            {
+                virtualScreen = GetFirstAcceleratedVirtualScreen(mPixelFormat);
+            }
+            if (virtualScreen)
+            {
+                setContextToGPU(gpuID, *virtualScreen);
+            }
         }
     }
 
     return egl::NoError();
 }
 
-}  // namespace rx
+egl::Error DisplayCGL::forceGPUSwitch(EGLint gpuIDHigh, EGLint gpuIDLow)
+{
+    if (mSupportsGPUSwitching)
+    {
+        uint64_t gpuID = static_cast<uint64_t>(static_cast<uint32_t>(gpuIDHigh)) << 32 |
+                         static_cast<uint32_t>(gpuIDLow);
+        if (gpuID != mCurrentGPUID)
+        {
+            auto virtualScreen = GetVirtualScreenByRegistryID(mPixelFormat, gpuID);
+            if (virtualScreen)
+            {
+                setContextToGPU(gpuID, *virtualScreen);
+            }
+        }
+    }
+    return egl::NoError();
+}
 
-#endif  // defined(ANGLE_PLATFORM_MACOS) || defined(ANGLE_PLATFORM_MACCATALYST)
+void DisplayCGL::setContextToGPU(uint64_t gpuID, GLint virtualScreen)
+{
+    CGLError error = CGLSetVirtualScreen(mContext, virtualScreen);
+    ASSERT(error == kCGLNoError);
+    if (error == kCGLNoError)
+    {
+        // Performing the above operation seems to need a call to CGLSetCurrentContext to make
+        // the context work properly again. Failing to do this returns null strings for
+        // GL_VENDOR and GL_RENDERER.
+        CGLUpdateContext(mContext);
+        CGLSetCurrentContext(mContext);
+        onStateChange(angle::SubjectMessage::SubjectChanged);
+        mCurrentGPUID = gpuID;
+        mRenderer->handleGPUSwitch();
+    }
+}
+
+}  // namespace rx

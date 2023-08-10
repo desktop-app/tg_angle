@@ -39,6 +39,7 @@ WHICH GENERATES THE GLSL ES PARSER (glslang_tab_autogen.cpp AND glslang_tab_auto
 #endif
 #if defined(__clang__)
 #pragma clang diagnostic ignored "-Wunreachable-code"
+#pragma clang diagnostic ignored "-Wunused-but-set-variable"
 #endif
 
 #include "angle_gl.h"
@@ -183,6 +184,7 @@ extern void yyerror(YYLTYPE* yylloc, TParseContext* context, void *scanner, cons
 %token <lex> IMAGECUBEARRAYEXT IIMAGECUBEARRAYEXT UIMAGECUBEARRAYEXT
 %token <lex> IMAGEBUFFER IIMAGEBUFFER UIMAGEBUFFER
 %token <lex> ATOMICUINT
+%token <lex> PIXELLOCALANGLE IPIXELLOCALANGLE UPIXELLOCALANGLE
 %token <lex> LAYOUT
 %token <lex> YUVCSCSTANDARDEXT YUVCSCSTANDARDEXTCONSTANT
 
@@ -657,6 +659,11 @@ function_header_with_parameters
         {
             $1->addParameter($2.createVariable(&context->symbolTable));
         }
+        else
+        {
+            // Remember that void was seen, so error can be generated if another parameter is seen.
+            $1->setHasVoidParameter();
+        }
     }
     | function_header_with_parameters COMMA parameter_declaration {
         $$ = $1;
@@ -669,6 +676,12 @@ function_header_with_parameters
         }
         else
         {
+            if ($1->hasVoidParameter())
+            {
+                // Only first parameter of one-parameter functions can be void.  This check prevents
+                // (void, non_void) parameters.
+                context->error(@2, "cannot be a parameter type except for '(void)'", "void");
+            }
             $1->addParameter($3.createVariable(&context->symbolTable));
         }
     }
@@ -700,7 +713,7 @@ parameter_declaration
     }
     | parameter_declarator {
         $$ = $1;
-        $$.type->setQualifier(EvqIn);
+        $$.type->setQualifier(EvqParamIn);
     }
     | type_qualifier parameter_type_specifier {
         $$ = $2;
@@ -708,7 +721,7 @@ parameter_declaration
     }
     | parameter_type_specifier {
         $$ = $1;
-        $$.type->setQualifier(EvqIn);
+        $$.type->setQualifier(EvqParamIn);
     }
     ;
 
@@ -811,7 +824,7 @@ invariant_qualifier
 
 precise_qualifier
     : PRECISE {
-        // empty
+        context->markShaderHasPrecise();
     }
     ;
 
@@ -1406,6 +1419,27 @@ type_specifier_nonarray
     }
     | ATOMICUINT {
         $$.initialize(EbtAtomicCounter, @1);
+    }
+    | PIXELLOCALANGLE {
+        if (!context->checkCanUseExtension(@1, TExtension::ANGLE_shader_pixel_local_storage))
+        {
+            context->error(@1, "unsupported type", "__pixelLocalANGLE");
+        }
+        $$.initialize(EbtPixelLocalANGLE, @1);
+    }
+    | IPIXELLOCALANGLE {
+        if (!context->checkCanUseExtension(@1, TExtension::ANGLE_shader_pixel_local_storage))
+        {
+            context->error(@1, "unsupported type", "__ipixelLocalANGLE");
+        }
+        $$.initialize(EbtIPixelLocalANGLE, @1);
+    }
+    | UPIXELLOCALANGLE {
+        if (!context->checkCanUseExtension(@1, TExtension::ANGLE_shader_pixel_local_storage))
+        {
+            context->error(@1, "unsupported type", "__upixelLocalANGLE");
+        }
+        $$.initialize(EbtUPixelLocalANGLE, @1);
     }
     | struct_specifier {
         $$ = $1;

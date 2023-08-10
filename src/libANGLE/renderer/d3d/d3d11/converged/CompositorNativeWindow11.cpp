@@ -235,8 +235,8 @@ RoHelper::RoHelper()
       mFpWindowsDeleteString(nullptr),
       mFpRoInitialize(nullptr),
       mFpRoUninitialize(nullptr),
-      mWinRtInitialized(false),
       mWinRtAvailable(false),
+      mWinRtInitialized(false),
       mComBaseModule(nullptr),
       mCoreMessagingModule(nullptr)
 {
@@ -249,7 +249,6 @@ RoHelper::RoHelper()
     mFpGetActivationFactory            = &::RoGetActivationFactory;
     mFpWindowsCompareStringOrdinal     = &::WindowsCompareStringOrdinal;
     mFpCreateDispatcherQueueController = &::CreateDispatcherQueueController;
-    mWinRtInitialized                  = true;
     mWinRtAvailable                    = true;
 #else
 
@@ -307,12 +306,14 @@ RoHelper::RoHelper()
 
     auto result = RoInitialize(RO_INIT_MULTITHREADED);
 
-    if (SUCCEEDED(result)) {
-        mWinRtInitialized = true;
-    }
-    if (SUCCEEDED(result) || result == S_FALSE || result == RPC_E_CHANGED_MODE)
+    if (SUCCEEDED(result) || result == RPC_E_CHANGED_MODE)
     {
         mWinRtAvailable = true;
+
+        if (SUCCEEDED(result))
+        {
+            mWinRtInitialized = true;
+        }
     }
 #endif
 }

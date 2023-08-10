@@ -14,12 +14,22 @@
 
 namespace rx
 {
+
+bool IsVulkanNullDisplayAvailable();
+DisplayImpl *CreateVulkanNullDisplay(const egl::DisplayState &state);
+
 #if defined(ANGLE_PLATFORM_WINDOWS)
 bool IsVulkanWin32DisplayAvailable();
 DisplayImpl *CreateVulkanWin32Display(const egl::DisplayState &state);
 #endif  // defined(ANGLE_PLATFORM_WINDOWS)
 
 #if defined(ANGLE_PLATFORM_LINUX)
+bool IsVulkanWaylandDisplayAvailable();
+DisplayImpl *CreateVulkanWaylandDisplay(const egl::DisplayState &state);
+
+bool IsVulkanGbmDisplayAvailable();
+DisplayImpl *CreateVulkanGbmDisplay(const egl::DisplayState &state);
+
 bool IsVulkanXcbDisplayAvailable();
 DisplayImpl *CreateVulkanXcbDisplay(const egl::DisplayState &state);
 

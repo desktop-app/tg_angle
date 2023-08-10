@@ -12,7 +12,6 @@
 
 #include "libANGLE/renderer/TransformFeedbackImpl.h"
 
-#include "libANGLE/renderer/glslang_wrapper_utils.h"
 #include "libANGLE/renderer/vulkan/vk_helpers.h"
 
 namespace gl
@@ -22,12 +21,15 @@ class ProgramState;
 
 namespace rx
 {
+class UpdateDescriptorSetsBuilder;
+class ShaderInterfaceVariableInfoMap;
+
 namespace vk
 {
 class DescriptorSetLayoutDesc;
-}
+}  // namespace vk
 
-class TransformFeedbackVk : public TransformFeedbackImpl
+class TransformFeedbackVk : public TransformFeedbackImpl, public angle::ObserverInterface
 {
   public:
     TransformFeedbackVk(const gl::TransformFeedbackState &state);
@@ -47,14 +49,6 @@ class TransformFeedbackVk : public TransformFeedbackImpl
                                    const ShaderInterfaceVariableInfoMap &variableInfoMap,
                                    size_t xfbBufferCount,
                                    vk::DescriptorSetLayoutDesc *descSetLayoutOut) const;
-    void initDescriptorSet(ContextVk *contextVk,
-                           const ShaderInterfaceVariableInfoMap &variableInfoMap,
-                           size_t xfbBufferCount,
-                           VkDescriptorSet descSet) const;
-    void updateDescriptorSet(ContextVk *contextVk,
-                             const gl::ProgramState &programState,
-                             const ShaderInterfaceVariableInfoMap &variableInfoMap,
-                             VkDescriptorSet descSet) const;
     void getBufferOffsets(ContextVk *contextVk,
                           GLint drawCallFirstVertex,
                           int32_t *offsetsOut,
@@ -97,16 +91,30 @@ class TransformFeedbackVk : public TransformFeedbackImpl
         return mCounterBufferHandles;
     }
 
-    vk::UniformsAndXfbDescriptorDesc &getTransformFeedbackDesc() { return mXFBBuffersDesc; }
+    void updateTransformFeedbackDescriptorDesc(
+        const vk::Context *context,
+        const gl::ProgramExecutable &executable,
+        const ShaderInterfaceVariableInfoMap &variableInfoMap,
+        const vk::BufferHelper &emptyBuffer,
+        bool activeUnpaused,
+        vk::DescriptorSetDescBuilder *builder) const;
+
+    const gl::TransformFeedbackBuffersArray<VkDeviceSize> &getCounterBufferOffsets() const
+    {
+        return mCounterBufferOffsets;
+    }
+
+    void onSubjectStateChange(angle::SubjectIndex index, angle::SubjectMessage message) override;
 
   private:
-    void writeDescriptorSet(ContextVk *contextVk,
+    void writeDescriptorSet(vk::Context *context,
+                            UpdateDescriptorSetsBuilder *updateBuilder,
                             const ShaderInterfaceVariableInfoMap &variableInfoMap,
                             size_t xfbBufferCount,
                             VkDescriptorBufferInfo *bufferInfo,
                             VkDescriptorSet descSet) const;
 
-    void initializeXFBBuffersDesc(ContextVk *contextVk, size_t xfbBufferCount);
+    void initializeXFBVariables(ContextVk *contextVk, uint32_t xfbBufferCount);
 
     void releaseCounterBuffers(RendererVk *renderer);
 
@@ -121,15 +129,13 @@ class TransformFeedbackVk : public TransformFeedbackImpl
     gl::TransformFeedbackBuffersArray<VkDeviceSize> mBufferOffsets;
     gl::TransformFeedbackBuffersArray<VkDeviceSize> mBufferSizes;
 
-    // Aligned offset for emulation. Could be smaller than offset.
-    gl::TransformFeedbackBuffersArray<VkDeviceSize> mAlignedBufferOffsets;
-
     // Counter buffer used for pause and resume.
     gl::TransformFeedbackBuffersArray<vk::BufferHelper> mCounterBufferHelpers;
     gl::TransformFeedbackBuffersArray<VkBuffer> mCounterBufferHandles;
+    gl::TransformFeedbackBuffersArray<VkDeviceSize> mCounterBufferOffsets;
 
-    // Keys to look up in the descriptor set cache
-    vk::UniformsAndXfbDescriptorDesc mXFBBuffersDesc;
+    // Buffer binding points
+    std::vector<angle::ObserverBinding> mBufferObserverBindings;
 };
 
 }  // namespace rx

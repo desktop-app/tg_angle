@@ -15,8 +15,9 @@
 #include "common/utilities.h"
 #include "libANGLE/Context.h"
 #include "libANGLE/InfoLog.h"
-#include "libANGLE/renderer/glslang_wrapper_utils.h"
 #include "libANGLE/renderer/vulkan/ContextVk.h"
+#include "libANGLE/renderer/vulkan/ShaderInterfaceVariableInfoMap.h"
+#include "libANGLE/renderer/vulkan/spv_utils.h"
 #include "libANGLE/renderer/vulkan/vk_cache_utils.h"
 #include "libANGLE/renderer/vulkan/vk_helpers.h"
 
@@ -29,10 +30,12 @@ class ShaderInfo final : angle::NonCopyable
     ShaderInfo();
     ~ShaderInfo();
 
-    angle::Result initShaders(const gl::ShaderBitSet &linkedShaderStages,
+    angle::Result initShaders(ContextVk *contextVk,
+                              const gl::ShaderBitSet &linkedShaderStages,
                               const gl::ShaderMap<const angle::spirv::Blob *> &spirvBlobs,
                               const ShaderInterfaceVariableInfoMap &variableInfoMap);
-    void release(ContextVk *contextVk);
+    void initShaderFromProgram(gl::ShaderType shaderType, const ShaderInfo &programShaderInfo);
+    void clear();
 
     ANGLE_INLINE bool valid() const { return mIsInitialized; }
 
@@ -49,12 +52,11 @@ class ShaderInfo final : angle::NonCopyable
 
 struct ProgramTransformOptions final
 {
-    uint8_t enableLineRasterEmulation : 1;
-    uint8_t removeEarlyFragmentTestsOptimization : 1;
-    uint8_t surfaceRotation : 3;
-    uint8_t enableDepthCorrection : 1;
-    uint8_t reserved : 2;  // must initialize to zero
-    static constexpr uint32_t kPermutationCount = 0x1 << 6;
+    uint8_t surfaceRotation : 1;
+    uint8_t removeTransformFeedbackEmulation : 1;
+    uint8_t multiSampleFramebufferFetch : 1;
+    uint8_t reserved : 5;  // must initialize to zero
+    static constexpr uint32_t kPermutationCount = 0x1 << 3;
 };
 static_assert(sizeof(ProgramTransformOptions) == 1, "Size check failed");
 static_assert(static_cast<int>(SurfaceRotation::EnumCount) <= 8, "Size check failed");
@@ -66,7 +68,7 @@ class ProgramInfo final : angle::NonCopyable
     ~ProgramInfo();
 
     angle::Result initProgram(ContextVk *contextVk,
-                              const gl::ShaderType shaderType,
+                              gl::ShaderType shaderType,
                               bool isLastPreFragmentStage,
                               bool isTransformFeedbackProgram,
                               const ShaderInfo &shaderInfo,
@@ -74,7 +76,7 @@ class ProgramInfo final : angle::NonCopyable
                               const ShaderInterfaceVariableInfoMap &variableInfoMap);
     void release(ContextVk *contextVk);
 
-    ANGLE_INLINE bool valid(const gl::ShaderType shaderType) const
+    ANGLE_INLINE bool valid(gl::ShaderType shaderType) const
     {
         return mProgramHelper.valid(shaderType);
     }
@@ -83,7 +85,7 @@ class ProgramInfo final : angle::NonCopyable
 
   private:
     vk::ShaderProgramHelper mProgramHelper;
-    gl::ShaderMap<vk::RefCounted<vk::ShaderAndSerial>> mShaders;
+    gl::ShaderMap<vk::RefCounted<vk::ShaderModule>> mShaders;
 };
 
 // State for the default uniform blocks.
@@ -101,12 +103,10 @@ struct DefaultUniformBlock final : private angle::NonCopyable
 };
 
 // Performance and resource counters.
-using DescriptorSetCountList = angle::PackedEnumMap<DescriptorSetIndex, uint32_t>;
+using DescriptorSetCountList   = angle::PackedEnumMap<DescriptorSetIndex, uint32_t>;
+using ImmutableSamplerIndexMap = angle::HashMap<vk::YcbcrConversionDesc, uint32_t>;
 
-struct ProgramExecutablePerfCounters
-{
-    DescriptorSetCountList descriptorSetsAllocated;
-};
+using DefaultUniformBlockMap = gl::ShaderMap<std::shared_ptr<DefaultUniformBlock>>;
 
 class ProgramExecutableVk
 {
@@ -116,164 +116,266 @@ class ProgramExecutableVk
 
     void reset(ContextVk *contextVk);
 
-    void save(gl::BinaryOutputStream *stream);
-    std::unique_ptr<rx::LinkEvent> load(gl::BinaryInputStream *stream);
+    void save(ContextVk *contextVk, bool isSeparable, gl::BinaryOutputStream *stream);
+    std::unique_ptr<rx::LinkEvent> load(ContextVk *contextVk,
+                                        const gl::ProgramExecutable &glExecutable,
+                                        bool isSeparable,
+                                        gl::BinaryInputStream *stream);
 
     void clearVariableInfoMap();
 
-    ProgramVk *getShaderProgram(const gl::State &glState, gl::ShaderType shaderType) const;
-
-    void fillProgramStateMap(const ContextVk *contextVk,
-                             gl::ShaderMap<const gl::ProgramState *> *programStatesOut);
-    const gl::ProgramExecutable &getGlExecutable();
-
-    ProgramInfo &getGraphicsDefaultProgramInfo() { return mGraphicsProgramInfos[0]; }
-    ProgramInfo &getGraphicsProgramInfo(ProgramTransformOptions option)
-    {
-        uint8_t index = gl::bitCast<uint8_t, ProgramTransformOptions>(option);
-        return mGraphicsProgramInfos[index];
-    }
-    ProgramInfo &getComputeProgramInfo() { return mComputeProgramInfo; }
     vk::BufferSerial getCurrentDefaultUniformBufferSerial() const
     {
         return mCurrentDefaultUniformBufferSerial;
     }
 
+    // Get the graphics pipeline if already created.
     angle::Result getGraphicsPipeline(ContextVk *contextVk,
-                                      gl::PrimitiveMode mode,
+                                      vk::GraphicsPipelineSubset pipelineSubset,
                                       const vk::GraphicsPipelineDesc &desc,
-                                      const gl::AttributesMask &activeAttribLocations,
+                                      const gl::ProgramExecutable &glExecutable,
                                       const vk::GraphicsPipelineDesc **descPtrOut,
                                       vk::PipelineHelper **pipelineOut);
 
-    angle::Result getComputePipeline(ContextVk *contextVk, vk::PipelineAndSerial **pipelineOut);
+    angle::Result createGraphicsPipeline(ContextVk *contextVk,
+                                         vk::GraphicsPipelineSubset pipelineSubset,
+                                         vk::PipelineCacheAccess *pipelineCache,
+                                         PipelineSource source,
+                                         const vk::GraphicsPipelineDesc &desc,
+                                         const gl::ProgramExecutable &glExecutable,
+                                         const vk::GraphicsPipelineDesc **descPtrOut,
+                                         vk::PipelineHelper **pipelineOut);
+
+    angle::Result linkGraphicsPipelineLibraries(ContextVk *contextVk,
+                                                vk::PipelineCacheAccess *pipelineCache,
+                                                const vk::GraphicsPipelineDesc &desc,
+                                                const gl::ProgramExecutable &glExecutable,
+                                                vk::PipelineHelper *vertexInputPipeline,
+                                                vk::PipelineHelper *shadersPipeline,
+                                                vk::PipelineHelper *fragmentOutputPipeline,
+                                                const vk::GraphicsPipelineDesc **descPtrOut,
+                                                vk::PipelineHelper **pipelineOut);
+
+    angle::Result getOrCreateComputePipeline(ContextVk *contextVk,
+                                             vk::PipelineCacheAccess *pipelineCache,
+                                             PipelineSource source,
+                                             const gl::ProgramExecutable &glExecutable,
+                                             vk::PipelineHelper **pipelineOut);
 
     const vk::PipelineLayout &getPipelineLayout() const { return mPipelineLayout.get(); }
-    angle::Result createPipelineLayout(const gl::Context *glContext,
-                                       gl::ActiveTextureArray<vk::TextureUnit> *activeTextures);
+    angle::Result createPipelineLayout(ContextVk *contextVk,
+                                       const gl::ProgramExecutable &glExecutable,
+                                       gl::ActiveTextureArray<TextureVk *> *activeTextures);
 
-    angle::Result updateTexturesDescriptorSet(ContextVk *contextVk);
-    angle::Result updateShaderResourcesDescriptorSet(ContextVk *contextVk,
-                                                     FramebufferVk *framebufferVk,
-                                                     vk::CommandBufferHelper *commandBufferHelper);
-    angle::Result updateTransformFeedbackDescriptorSet(
-        const gl::ProgramState &programState,
-        gl::ShaderMap<DefaultUniformBlock> &defaultUniformBlocks,
+    angle::Result updateTexturesDescriptorSet(vk::Context *context,
+                                              const gl::ProgramExecutable &executable,
+                                              const gl::ActiveTextureArray<TextureVk *> &textures,
+                                              const gl::SamplerBindingVector &samplers,
+                                              bool emulateSeamfulCubeMapSampling,
+                                              PipelineType pipelineType,
+                                              UpdateDescriptorSetsBuilder *updateBuilder,
+                                              vk::CommandBufferHelperCommon *commandBufferHelper,
+                                              const vk::DescriptorSetDesc &texturesDesc);
+    angle::Result updateShaderResourcesDescriptorSet(
+        vk::Context *context,
+        UpdateDescriptorSetsBuilder *updateBuilder,
+        vk::CommandBufferHelperCommon *commandBufferHelper,
+        const vk::DescriptorSetDescBuilder &shaderResourcesDesc,
+        vk::SharedDescriptorSetCacheKey *newSharedCacheKeyOut);
+    angle::Result updateUniformsAndXfbDescriptorSet(
+        vk::Context *context,
+        UpdateDescriptorSetsBuilder *updateBuilder,
+        vk::CommandBufferHelperCommon *commandBufferHelper,
         vk::BufferHelper *defaultUniformBuffer,
-        ContextVk *contextVk,
-        const vk::UniformsAndXfbDescriptorDesc &xfbBufferDesc);
-    angle::Result updateInputAttachmentDescriptorSet(const gl::ProgramExecutable &executable,
-                                                     const gl::ShaderType shaderType,
-                                                     ContextVk *contextVk,
-                                                     FramebufferVk *framebufferVk);
+        vk::DescriptorSetDescBuilder *uniformsAndXfbDesc);
 
-    angle::Result updateDescriptorSets(ContextVk *contextVk, vk::CommandBuffer *commandBuffer);
+    template <typename CommandBufferT>
+    angle::Result bindDescriptorSets(vk::Context *context,
+                                     vk::CommandBufferHelperCommon *commandBufferHelper,
+                                     CommandBufferT *commandBuffer,
+                                     PipelineType pipelineType);
 
-    void updateEarlyFragmentTestsOptimization(ContextVk *contextVk);
-
-    void setProgram(ProgramVk *program)
+    bool usesDynamicUniformBufferDescriptors() const
     {
-        ASSERT(!mProgram && !mProgramPipeline);
-        mProgram = program;
+        return mUniformBufferDescriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
     }
-    void setProgramPipeline(ProgramPipelineVk *pipeline)
+    VkDescriptorType getUniformBufferDescriptorType() const { return mUniformBufferDescriptorType; }
+    bool usesDynamicShaderStorageBufferDescriptors() const { return false; }
+    VkDescriptorType getStorageBufferDescriptorType() const
     {
-        ASSERT(!mProgram && !mProgramPipeline);
-        mProgramPipeline = pipeline;
+        return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    }
+    bool usesDynamicAtomicCounterBufferDescriptors() const { return false; }
+
+    bool areImmutableSamplersCompatible(
+        const ImmutableSamplerIndexMap &immutableSamplerIndexMap) const
+    {
+        return (mImmutableSamplerIndexMap == immutableSamplerIndexMap);
     }
 
-    ProgramExecutablePerfCounters getAndResetObjectPerfCounters();
+    size_t getDefaultUniformAlignedSize(vk::Context *context, gl::ShaderType shaderType) const
+    {
+        RendererVk *renderer = context->getRenderer();
+        size_t alignment     = static_cast<size_t>(
+            renderer->getPhysicalDeviceProperties().limits.minUniformBufferOffsetAlignment);
+        return roundUp(mDefaultUniformBlocks[shaderType]->uniformData.size(), alignment);
+    }
+
+    std::shared_ptr<DefaultUniformBlock> &getSharedDefaultUniformBlock(gl::ShaderType shaderType)
+    {
+        return mDefaultUniformBlocks[shaderType];
+    }
+
+    bool hasDirtyUniforms() const { return mDefaultUniformBlocksDirty.any(); }
+
+    void setAllDefaultUniformsDirty(const gl::ProgramExecutable &executable);
+    angle::Result updateUniforms(vk::Context *context,
+                                 UpdateDescriptorSetsBuilder *updateBuilder,
+                                 vk::CommandBufferHelperCommon *commandBufferHelper,
+                                 vk::BufferHelper *emptyBuffer,
+                                 const gl::ProgramExecutable &glExecutable,
+                                 vk::DynamicBuffer *defaultUniformStorage,
+                                 bool isTransformFeedbackActiveUnpaused,
+                                 TransformFeedbackVk *transformFeedbackVk);
+    void onProgramBind(const gl::ProgramExecutable &glExecutable);
+
+    const ShaderInterfaceVariableInfoMap &getVariableInfoMap() const { return mVariableInfoMap; }
+
+    angle::Result warmUpPipelineCache(ContextVk *contextVk,
+                                      const gl::ProgramExecutable &glExecutable);
 
   private:
     friend class ProgramVk;
     friend class ProgramPipelineVk;
 
-    angle::Result allocUniformAndXfbDescriptorSet(
-        ContextVk *contextVk,
-        const vk::UniformsAndXfbDescriptorDesc &xfbBufferDesc,
-        bool *newDescriptorSetAllocated);
-
-    angle::Result allocateDescriptorSet(ContextVk *contextVk,
-                                        DescriptorSetIndex descriptorSetIndex);
-    angle::Result allocateDescriptorSetAndGetInfo(ContextVk *contextVk,
-                                                  DescriptorSetIndex descriptorSetIndex,
-                                                  bool *newPoolAllocatedOut);
     void addInterfaceBlockDescriptorSetDesc(const std::vector<gl::InterfaceBlock> &blocks,
-                                            const gl::ShaderType shaderType,
+                                            gl::ShaderType shaderType,
+                                            ShaderVariableType variableType,
                                             VkDescriptorType descType,
                                             vk::DescriptorSetLayoutDesc *descOut);
     void addAtomicCounterBufferDescriptorSetDesc(
         const std::vector<gl::AtomicCounterBuffer> &atomicCounterBuffers,
-        const gl::ShaderType shaderType,
+        gl::ShaderType shaderType,
         vk::DescriptorSetLayoutDesc *descOut);
     void addImageDescriptorSetDesc(const gl::ProgramExecutable &executable,
                                    vk::DescriptorSetLayoutDesc *descOut);
     void addInputAttachmentDescriptorSetDesc(const gl::ProgramExecutable &executable,
-                                             const gl::ShaderType shaderType,
+                                             gl::ShaderType shaderType,
                                              vk::DescriptorSetLayoutDesc *descOut);
-    void addTextureDescriptorSetDesc(const gl::ProgramState &programState,
-                                     const gl::ActiveTextureArray<vk::TextureUnit> *activeTextures,
-                                     vk::DescriptorSetLayoutDesc *descOut);
+    angle::Result addTextureDescriptorSetDesc(
+        ContextVk *contextVk,
+        const gl::ProgramExecutable &executable,
+        const gl::ActiveTextureArray<TextureVk *> *activeTextures,
+        vk::DescriptorSetLayoutDesc *descOut);
 
     void resolvePrecisionMismatch(const gl::ProgramMergedVaryings &mergedVaryings);
-    void updateDefaultUniformsDescriptorSet(const gl::ShaderType shaderType,
-                                            const DefaultUniformBlock &defaultUniformBlock,
-                                            vk::BufferHelper *defaultUniformBuffer,
-                                            ContextVk *contextVk);
-    void updateTransformFeedbackDescriptorSetImpl(const gl::ProgramState &programState,
-                                                  ContextVk *contextVk);
-    angle::Result getOrAllocateShaderResourcesDescriptorSet(ContextVk *contextVk,
-                                                            VkDescriptorSet *descriptorSetOut);
-    angle::Result updateBuffersDescriptorSet(ContextVk *contextVk,
-                                             const gl::ShaderType shaderType,
-                                             vk::CommandBufferHelper *commandBufferHelper,
-                                             const std::vector<gl::InterfaceBlock> &blocks,
-                                             VkDescriptorType descriptorType);
-    angle::Result updateAtomicCounterBuffersDescriptorSet(
-        const gl::ProgramState &programState,
-        const gl::ShaderType shaderType,
+
+    size_t calcUniformUpdateRequiredSpace(vk::Context *context,
+                                          const gl::ProgramExecutable &glExecutable,
+                                          gl::ShaderMap<VkDeviceSize> *uniformOffsets) const;
+
+    ANGLE_INLINE angle::Result initProgram(ContextVk *contextVk,
+                                           gl::ShaderType shaderType,
+                                           bool isLastPreFragmentStage,
+                                           bool isTransformFeedbackProgram,
+                                           ProgramTransformOptions optionBits,
+                                           ProgramInfo *programInfo,
+                                           const ShaderInterfaceVariableInfoMap &variableInfoMap)
+    {
+        ASSERT(mOriginalShaderInfo.valid());
+
+        // Create the program pipeline.  This is done lazily and once per combination of
+        // specialization constants.
+        if (!programInfo->valid(shaderType))
+        {
+            ANGLE_TRY(programInfo->initProgram(contextVk, shaderType, isLastPreFragmentStage,
+                                               isTransformFeedbackProgram, mOriginalShaderInfo,
+                                               optionBits, variableInfoMap));
+        }
+        ASSERT(programInfo->valid(shaderType));
+
+        return angle::Result::Continue;
+    }
+
+    ANGLE_INLINE angle::Result initGraphicsShaderProgram(
         ContextVk *contextVk,
-        vk::CommandBufferHelper *commandBufferHelper);
-    angle::Result updateImagesDescriptorSet(ContextVk *contextVk,
-                                            const gl::ProgramExecutable &executable,
-                                            const gl::ShaderType shaderType);
-    angle::Result initDynamicDescriptorPools(ContextVk *contextVk,
-                                             vk::DescriptorSetLayoutDesc &descriptorSetLayoutDesc,
-                                             DescriptorSetIndex descriptorSetIndex,
-                                             VkDescriptorSetLayout descriptorSetLayout);
+        gl::ShaderType shaderType,
+        bool isLastPreFragmentStage,
+        bool isTransformFeedbackProgram,
+        ProgramTransformOptions optionBits,
+        ProgramInfo *programInfo,
+        const ShaderInterfaceVariableInfoMap &variableInfoMap)
+    {
+        return initProgram(contextVk, shaderType, isLastPreFragmentStage,
+                           isTransformFeedbackProgram, optionBits, programInfo, variableInfoMap);
+    }
 
-    void outputCumulativePerfCounters();
+    ANGLE_INLINE angle::Result initComputeProgram(
+        ContextVk *contextVk,
+        ProgramInfo *programInfo,
+        const ShaderInterfaceVariableInfoMap &variableInfoMap)
+    {
+        ProgramTransformOptions optionBits = {};
+        return initProgram(contextVk, gl::ShaderType::Compute, false, false, optionBits,
+                           programInfo, variableInfoMap);
+    }
 
-    // Descriptor sets for uniform blocks and textures for this program.
+    ProgramTransformOptions getTransformOptions(ContextVk *contextVk,
+                                                const vk::GraphicsPipelineDesc &desc,
+                                                const gl::ProgramExecutable &glExecutable);
+    angle::Result initGraphicsShaderPrograms(ContextVk *contextVk,
+                                             ProgramTransformOptions transformOptions,
+                                             const gl::ProgramExecutable &glExecutable,
+                                             vk::ShaderProgramHelper **shaderProgramOut);
+    angle::Result createGraphicsPipelineImpl(ContextVk *contextVk,
+                                             ProgramTransformOptions transformOptions,
+                                             vk::GraphicsPipelineSubset pipelineSubset,
+                                             vk::PipelineCacheAccess *pipelineCache,
+                                             PipelineSource source,
+                                             const vk::GraphicsPipelineDesc &desc,
+                                             const gl::ProgramExecutable &glExecutable,
+                                             const vk::GraphicsPipelineDesc **descPtrOut,
+                                             vk::PipelineHelper **pipelineOut);
+
+    angle::Result resizeUniformBlockMemory(ContextVk *contextVk,
+                                           const gl::ProgramExecutable &glExecutable,
+                                           const gl::ShaderMap<size_t> &requiredBufferSize);
+
+    angle::Result getOrAllocateDescriptorSet(vk::Context *context,
+                                             UpdateDescriptorSetsBuilder *updateBuilder,
+                                             vk::CommandBufferHelperCommon *commandBufferHelper,
+                                             const vk::DescriptorSetDescBuilder &descriptorSetDesc,
+                                             DescriptorSetIndex setIndex,
+                                             vk::SharedDescriptorSetCacheKey *newSharedCacheKeyOut);
+
+    // When loading from cache / binary, initialize the pipeline cache with given data.  Otherwise
+    // the cache is lazily created as needed.
+    angle::Result initializePipelineCache(ContextVk *contextVk,
+                                          bool compressed,
+                                          const std::vector<uint8_t> &pipelineData);
+    angle::Result ensurePipelineCacheInitialized(ContextVk *contextVk);
+
+    void resetLayout(ContextVk *contextVk);
+
+    // Descriptor sets and pools for shader resources for this program.
     vk::DescriptorSetArray<VkDescriptorSet> mDescriptorSets;
-    vk::DescriptorSetArray<VkDescriptorSet> mEmptyDescriptorSets;
-    size_t mNumDefaultUniformDescriptors;
+    vk::DescriptorSetArray<vk::DescriptorPoolPointer> mDescriptorPools;
+    vk::DescriptorSetArray<vk::RefCountedDescriptorPoolBinding> mDescriptorPoolBindings;
+    uint32_t mNumDefaultUniformDescriptors;
     vk::BufferSerial mCurrentDefaultUniformBufferSerial;
-
-    DescriptorSetCache<vk::UniformsAndXfbDescriptorDesc, VulkanCacheType::UniformsAndXfbDescriptors>
-        mUniformsAndXfbDescriptorsCache;
-    DescriptorSetCache<vk::TextureDescriptorDesc, VulkanCacheType::TextureDescriptors>
-        mTextureDescriptorsCache;
 
     // We keep a reference to the pipeline and descriptor set layouts. This ensures they don't get
     // deleted while this program is in use.
+    uint32_t mImmutableSamplersMaxDescriptorCount;
+    ImmutableSamplerIndexMap mImmutableSamplerIndexMap;
     vk::BindingPointer<vk::PipelineLayout> mPipelineLayout;
     vk::DescriptorSetLayoutPointerArray mDescriptorSetLayouts;
 
-    // Keep bindings to the descriptor pools. This ensures the pools stay valid while the Program
-    // is in use.
-    vk::DescriptorSetArray<vk::RefCountedDescriptorPoolBinding> mDescriptorPoolBindings;
-
-    // Store descriptor pools here. We store the descriptors in the Program to facilitate descriptor
-    // cache management. It can also allow fewer descriptors for shaders which use fewer
-    // textures/buffers.
-    vk::DescriptorSetArray<vk::DynamicDescriptorPool> mDynamicDescriptorPools;
-
     // A set of dynamic offsets used with vkCmdBindDescriptorSets for the default uniform buffers.
-    gl::ShaderVector<uint32_t> mDynamicDescriptorOffsets;
+    VkDescriptorType mUniformBufferDescriptorType;
+    gl::ShaderVector<uint32_t> mDynamicUniformDescriptorOffsets;
+    std::vector<uint32_t> mDynamicShaderResourceDescriptorOffsets;
 
-    // TODO: http://anglebug.com/4524: Need a different hash key than a string,
-    // since that's slow to calculate.
     ShaderInterfaceVariableInfoMap mVariableInfoMap;
 
     // We store all permutations of surface rotation and transformed SPIR-V programs here. We may
@@ -281,13 +383,36 @@ class ProgramExecutableVk
     ProgramInfo mGraphicsProgramInfos[ProgramTransformOptions::kPermutationCount];
     ProgramInfo mComputeProgramInfo;
 
-    ProgramTransformOptions mTransformOptions;
+    // Pipeline caches.  The pipelines are tightly coupled with the shaders they are created for, so
+    // they live in the program executable.  With VK_EXT_graphics_pipeline_library, the pipeline is
+    // divided in subsets; the "shaders" subset is created based on the shaders, so its cache lives
+    // in the program executable.  The "vertex input" and "fragment output" pipelines are
+    // independent, and live in the context.
+    CompleteGraphicsPipelineCache
+        mCompleteGraphicsPipelines[ProgramTransformOptions::kPermutationCount];
+    ShadersGraphicsPipelineCache
+        mShadersGraphicsPipelines[ProgramTransformOptions::kPermutationCount];
+    vk::ComputePipelineCache mComputePipelines;
 
-    ProgramVk *mProgram;
-    ProgramPipelineVk *mProgramPipeline;
+    DefaultUniformBlockMap mDefaultUniformBlocks;
+    gl::ShaderBitSet mDefaultUniformBlocksDirty;
 
-    ProgramExecutablePerfCounters mPerfCounters;
-    ProgramExecutablePerfCounters mCumulativePerfCounters;
+    ShaderInfo mOriginalShaderInfo;
+
+    // The pipeline cache specific to this program executable.  Currently:
+    //
+    // - This is used during warm up (at link time)
+    // - The contents are merged to RendererVk's pipeline cache immediately after warm up
+    // - The contents are returned as part of program binary
+    // - Draw-time pipeline creation uses RendererVk's cache
+    //
+    // Without VK_EXT_graphics_pipeline_library, this cache is not used for draw-time pipeline
+    // creations to allow reuse of other blobs that are independent of the actual shaders; vertex
+    // input fetch, fragment output and blend.
+    //
+    // With VK_EXT_graphics_pipeline_library, this cache is used for the "shaders" subset of the
+    // pipeline.
+    vk::PipelineCache mPipelineCache;
 };
 
 }  // namespace rx

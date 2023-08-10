@@ -11,6 +11,7 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include <GLSLANG/ShaderLang.h>
 
 #include <math.h>
 #include <string>
@@ -115,6 +116,11 @@ bool IsIntegerFormat(GLenum unsizedFormat);
 // Returns the product of the sizes in the vector, or 1 if the vector is empty. Doesn't currently
 // perform overflow checks.
 unsigned int ArraySizeProduct(const std::vector<unsigned int> &arraySizes);
+// Returns the product of the sizes in the vector except for the outermost dimension, or 1 if the
+// vector is empty.
+unsigned int InnerArraySizeProduct(const std::vector<unsigned int> &arraySizes);
+// Returns the outermost array dimension, or 1 if the vector is empty.
+unsigned int OutermostArraySize(const std::vector<unsigned int> &arraySizes);
 
 // Return the array index at the end of name, and write the length of name before the final array
 // index into nameLengthWithoutArrayIndexOut. In case name doesn't include an array index, return
@@ -205,6 +211,8 @@ const char *GetGenericErrorMessage(GLenum error);
 
 unsigned int ElementTypeSize(GLenum elementType);
 
+bool IsMipmapFiltered(GLenum minFilterMode);
+
 template <typename T>
 T GetClampedVertexCount(size_t vertexCount)
 {
@@ -251,7 +259,17 @@ enum class SrgbWriteControlMode
     Linear  = 1
 };
 
+// For use with EXT_YUV_target
+// A sampler of external YUV textures may either implicitly perform RGB conversion (regular
+// samplerExternalOES) or skip the conversion and sample raw YUV values (__samplerExternal2DY2Y).
+enum class YuvSamplingMode
+{
+    Default = 0,
+    Y2Y     = 1
+};
+
 ShaderType GetShaderTypeFromBitfield(size_t singleShaderType);
+GLbitfield GetBitfieldFromShaderType(ShaderType shaderType);
 bool ShaderTypeSupportsTransformFeedback(ShaderType shaderType);
 // Given a set of shader stages, returns the last vertex processing stage.  This is the stage that
 // interfaces the fragment shader.
@@ -284,10 +302,15 @@ EGLenum GLComponentTypeToEGLColorComponentType(GLenum glComponentType);
 EGLClientBuffer GLObjectHandleToEGLClientBuffer(GLuint handle);
 }  // namespace gl_egl
 
-#if !defined(ANGLE_ENABLE_WINDOWS_UWP)
-std::string getTempPath();
+namespace angle
+{
+bool IsDrawEntryPoint(EntryPoint entryPoint);
+bool IsDispatchEntryPoint(EntryPoint entryPoint);
+bool IsClearEntryPoint(EntryPoint entryPoint);
+bool IsQueryEntryPoint(EntryPoint entryPoint);
+}  // namespace angle
+
 void writeFile(const char *path, const void *data, size_t size);
-#endif
 
 #if defined(ANGLE_PLATFORM_WINDOWS)
 void ScheduleYield();

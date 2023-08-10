@@ -46,6 +46,8 @@ BlockType GetBlockType(TQualifier qualifier)
             return BlockType::BLOCK_UNIFORM;
         case EvqBuffer:
             return BlockType::BLOCK_BUFFER;
+        case EvqPixelLocalEXT:
+            return BlockType::PIXEL_LOCAL_EXT;
         default:
             UNREACHABLE();
             return BlockType::BLOCK_UNIFORM;
@@ -147,6 +149,7 @@ class CollectVariablesTraverser : public TIntermTraverser
                             bool staticUse,
                             bool isShaderIOBlock,
                             bool isPatch,
+                            SymbolType symbolType,
                             ShaderVariable *variableOut) const;
     void setCommonVariableProperties(const TType &type,
                                      const TVariable &variable,
@@ -196,8 +199,6 @@ class CollectVariablesTraverser : public TIntermTraverser
     bool mVertexIDAdded;
     bool mPointSizeAdded;
     bool mDrawIDAdded;
-    bool mBaseVertexAdded;
-    bool mBaseInstanceAdded;
 
     // Vertex Shader and Geometry Shader builtins
     bool mPositionAdded;
@@ -210,9 +211,9 @@ class CollectVariablesTraverser : public TIntermTraverser
     bool mHelperInvocationAdded;
     bool mFragCoordAdded;
     bool mLastFragDataAdded;
+    bool mLastFragColorAdded;
     bool mFragColorAdded;
     bool mFragDataAdded;
-    bool mFragDepthEXTAdded;
     bool mFragDepthAdded;
     bool mSecondaryFragColorEXTAdded;
     bool mSecondaryFragDataEXTAdded;
@@ -240,6 +241,7 @@ class CollectVariablesTraverser : public TIntermTraverser
     bool mPatchVerticesInAdded;
     bool mTessLevelOuterAdded;
     bool mTessLevelInnerAdded;
+    bool mBoundingBoxAdded;
     bool mTessCoordAdded;
     const int mTessControlShaderOutputVertices;
 
@@ -285,8 +287,6 @@ CollectVariablesTraverser::CollectVariablesTraverser(
       mVertexIDAdded(false),
       mPointSizeAdded(false),
       mDrawIDAdded(false),
-      mBaseVertexAdded(false),
-      mBaseInstanceAdded(false),
       mPositionAdded(false),
       mClipDistanceAdded(false),
       mCullDistanceAdded(false),
@@ -295,9 +295,9 @@ CollectVariablesTraverser::CollectVariablesTraverser(
       mHelperInvocationAdded(false),
       mFragCoordAdded(false),
       mLastFragDataAdded(false),
+      mLastFragColorAdded(false),
       mFragColorAdded(false),
       mFragDataAdded(false),
-      mFragDepthEXTAdded(false),
       mFragDepthAdded(false),
       mSecondaryFragColorEXTAdded(false),
       mSecondaryFragDataEXTAdded(false),
@@ -315,6 +315,7 @@ CollectVariablesTraverser::CollectVariablesTraverser(
       mPatchVerticesInAdded(false),
       mTessLevelOuterAdded(false),
       mTessLevelInnerAdded(false),
+      mBoundingBoxAdded(false),
       mTessCoordAdded(false),
       mTessControlShaderOutputVertices(tessControlShaderOutputVertices),
       mHashFunction(hashFunction),
@@ -338,8 +339,9 @@ void CollectVariablesTraverser::setBuiltInInfoFromSymbol(const TVariable &variab
 
     bool isShaderIOBlock =
         IsShaderIoBlock(type.getQualifier()) && type.getInterfaceBlock() != nullptr;
-    bool isPatch =
-        type.getQualifier() == EvqTessLevelInner || type.getQualifier() == EvqTessLevelOuter;
+    bool isPatch = type.getQualifier() == EvqTessLevelInner ||
+                   type.getQualifier() == EvqTessLevelOuter ||
+                   type.getQualifier() == EvqBoundingBox;
 
     setFieldOrVariableProperties(type, true, isShaderIOBlock, isPatch, info);
 }
@@ -512,29 +514,6 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
             mNumSamplesAdded = true;
         }
     }
-    else if (symbolName == "gl_LastFragData" && qualifier == EvqGlobal)
-    {
-        // If gl_LastFragData is redeclared, the qualifier of redeclaration is EvqGlobal, and it
-        // makes "gl_LastFragData" can't be collected in this function. That's because
-        // "gl_LastFragData" is redeclared like below. E.g., "highp vec4
-        // gl_LastFragData[gl_MaxDrawBuffers];" So, if gl_LastFragData can be parsed with a correct
-        // qualifier in PasreContext.cpp, this code isn't needed.
-        if (!mLastFragDataAdded)
-        {
-            ShaderVariable info;
-
-            const TType &type = symbol->getType();
-
-            info.name       = symbolName.data();
-            info.mappedName = symbolName.data();
-            setFieldOrVariableProperties(type, true, false, false, &info);
-            info.active = true;
-
-            mInputVaryings->push_back(info);
-            mLastFragDataAdded = true;
-        }
-        return;
-    }
     else
     {
         switch (qualifier)
@@ -545,7 +524,8 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                 break;
             case EvqFragmentOut:
             case EvqFragmentInOut:
-                var = FindVariable(symbolName, mOutputVariables);
+                var                  = FindVariable(symbolName, mOutputVariables);
+                var->isFragmentInOut = qualifier == EvqFragmentInOut;
                 break;
             case EvqUniform:
             {
@@ -559,7 +539,7 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                 }
 
                 // It's an internal error to reference an undefined user uniform
-                ASSERT(!symbolName.beginsWith("gl_") || var);
+                ASSERT(!gl::IsBuiltInName(symbolName.data()) || var);
             }
             break;
             case EvqBuffer:
@@ -597,7 +577,7 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                 recordBuiltInAttributeUsed(symbol->variable(), &mLocalInvocationIndexAdded);
                 return;
             case EvqInstanceID:
-                // Whenever the SH_INITIALIZE_BUILTINS_FOR_INSTANCED_MULTIVIEW option is set,
+                // Whenever the initializeBuiltinsForInstancedMultiview option is set,
                 // gl_InstanceID is added inside expressions to initialize ViewID_OVR and
                 // InstanceID. Note that gl_InstanceID is not added to the symbol table for ESSL1
                 // shaders.
@@ -615,35 +595,17 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
             case EvqDrawID:
                 recordBuiltInAttributeUsed(symbol->variable(), &mDrawIDAdded);
                 return;
-            case EvqBaseVertex:
-                recordBuiltInAttributeUsed(symbol->variable(), &mBaseVertexAdded);
-                return;
-            case EvqBaseInstance:
-                recordBuiltInAttributeUsed(symbol->variable(), &mBaseInstanceAdded);
-                return;
             case EvqLastFragData:
                 recordBuiltInVaryingUsed(symbol->variable(), &mLastFragDataAdded, mInputVaryings);
+                return;
+            case EvqLastFragColor:
+                recordBuiltInVaryingUsed(symbol->variable(), &mLastFragColorAdded, mInputVaryings);
                 return;
             case EvqFragColor:
                 recordBuiltInFragmentOutputUsed(symbol->variable(), &mFragColorAdded);
                 return;
             case EvqFragData:
-                if (!mFragDataAdded)
-                {
-                    ShaderVariable info;
-                    setBuiltInInfoFromSymbol(symbol->variable(), &info);
-                    if (!IsExtensionEnabled(mExtensionBehavior, TExtension::EXT_draw_buffers))
-                    {
-                        ASSERT(info.arraySizes.size() == 1u);
-                        info.arraySizes.back() = 1u;
-                    }
-                    info.active = true;
-                    mOutputVariables->push_back(info);
-                    mFragDataAdded = true;
-                }
-                return;
-            case EvqFragDepthEXT:
-                recordBuiltInFragmentOutputUsed(symbol->variable(), &mFragDepthEXTAdded);
+                recordBuiltInFragmentOutputUsed(symbol->variable(), &mFragDataAdded);
                 return;
             case EvqFragDepth:
                 recordBuiltInFragmentOutputUsed(symbol->variable(), &mFragDepthAdded);
@@ -675,14 +637,10 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                                              mInputVaryings);
                 }
                 break;
-            case EvqLayer:
+            case EvqLayerOut:
                 if (mShaderType == GL_GEOMETRY_SHADER_EXT)
                 {
                     recordBuiltInVaryingUsed(symbol->variable(), &mLayerAdded, mOutputVaryings);
-                }
-                else if (mShaderType == GL_FRAGMENT_SHADER)
-                {
-                    recordBuiltInVaryingUsed(symbol->variable(), &mLayerAdded, mInputVaryings);
                 }
                 else
                 {
@@ -690,6 +648,10 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                            (IsExtensionEnabled(mExtensionBehavior, TExtension::OVR_multiview2) ||
                             IsExtensionEnabled(mExtensionBehavior, TExtension::OVR_multiview)));
                 }
+                break;
+            case EvqLayerIn:
+                ASSERT(mShaderType == GL_FRAGMENT_SHADER);
+                recordBuiltInVaryingUsed(symbol->variable(), &mLayerAdded, mInputVaryings);
                 break;
             case EvqShared:
                 if (mShaderType == GL_COMPUTE_SHADER)
@@ -699,7 +661,14 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                 }
                 break;
             case EvqClipDistance:
-                recordBuiltInVaryingUsed(symbol->variable(), &mClipDistanceAdded, mOutputVaryings);
+                recordBuiltInVaryingUsed(
+                    symbol->variable(), &mClipDistanceAdded,
+                    mShaderType == GL_FRAGMENT_SHADER ? mInputVaryings : mOutputVaryings);
+                return;
+            case EvqCullDistance:
+                recordBuiltInVaryingUsed(
+                    symbol->variable(), &mCullDistanceAdded,
+                    mShaderType == GL_FRAGMENT_SHADER ? mInputVaryings : mOutputVaryings);
                 return;
             case EvqSampleID:
                 recordBuiltInVaryingUsed(symbol->variable(), &mSampleIDAdded, mInputVaryings);
@@ -712,9 +681,6 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                 return;
             case EvqSampleMask:
                 recordBuiltInFragmentOutputUsed(symbol->variable(), &mSampleMaskAdded);
-                return;
-            case EvqCullDistance:
-                recordBuiltInVaryingUsed(symbol->variable(), &mCullDistanceAdded, mOutputVaryings);
                 return;
             case EvqPatchVerticesIn:
                 recordBuiltInVaryingUsed(symbol->variable(), &mPatchVerticesInAdded,
@@ -748,6 +714,9 @@ void CollectVariablesTraverser::visitSymbol(TIntermSymbol *symbol)
                     recordBuiltInVaryingUsed(symbol->variable(), &mTessLevelInnerAdded,
                                              mInputVaryings);
                 }
+                break;
+            case EvqBoundingBox:
+                recordBuiltInVaryingUsed(symbol->variable(), &mBoundingBoxAdded, mOutputVaryings);
                 break;
             default:
                 break;
@@ -790,25 +759,28 @@ void CollectVariablesTraverser::setFieldOrVariableProperties(const TType &type,
             // ShaderVariable objects.
             ShaderVariable fieldVariable;
             setFieldProperties(*field->type(), field->name(), staticUse, isShaderIOBlock, isPatch,
-                               &fieldVariable);
+                               field->symbolType(), &fieldVariable);
             variableOut->fields.push_back(fieldVariable);
         }
     }
     else if (interfaceBlock && isShaderIOBlock)
     {
-        variableOut->type = GL_NONE;
+        const bool isPerVertex = (interfaceBlock->name() == "gl_PerVertex");
+        variableOut->type      = GL_NONE;
         if (interfaceBlock->symbolType() != SymbolType::Empty)
         {
             variableOut->structOrBlockName = interfaceBlock->name().data();
             variableOut->mappedStructOrBlockName =
-                HashName(interfaceBlock->name(), mHashFunction, nullptr).data();
+                isPerVertex ? interfaceBlock->name().data()
+                            : HashName(interfaceBlock->name(), mHashFunction, nullptr).data();
         }
         const TFieldList &fields = interfaceBlock->fields();
         for (const TField *field : fields)
         {
             ShaderVariable fieldVariable;
+
             setFieldProperties(*field->type(), field->name(), staticUse, true, isPatch,
-                               &fieldVariable);
+                               field->symbolType(), &fieldVariable);
             fieldVariable.isShaderIOBlock = true;
             variableOut->fields.push_back(fieldVariable);
         }
@@ -852,12 +824,15 @@ void CollectVariablesTraverser::setFieldProperties(const TType &type,
                                                    bool staticUse,
                                                    bool isShaderIOBlock,
                                                    bool isPatch,
+                                                   SymbolType symbolType,
                                                    ShaderVariable *variableOut) const
 {
     ASSERT(variableOut);
     setFieldOrVariableProperties(type, staticUse, isShaderIOBlock, isPatch, variableOut);
     variableOut->name.assign(name.data(), name.length());
-    variableOut->mappedName = HashName(name, mHashFunction, nullptr).data();
+    variableOut->mappedName = (symbolType == SymbolType::BuiltIn)
+                                  ? name.data()
+                                  : HashName(name, mHashFunction, nullptr).data();
 }
 
 void CollectVariablesTraverser::setCommonVariableProperties(const TType &type,
@@ -941,8 +916,10 @@ ShaderVariable CollectVariablesTraverser::recordVarying(const TIntermSymbol &var
         case EvqFlatOut:
         case EvqNoPerspectiveOut:
         case EvqCentroidOut:
-        case EvqGeometryOut:
         case EvqSampleOut:
+        case EvqNoPerspectiveCentroidOut:
+        case EvqNoPerspectiveSampleOut:
+        case EvqGeometryOut:
             if (mSymbolTable->isVaryingInvariant(variable.variable()) || type.isInvariant())
             {
                 varying.isInvariant = true;
@@ -1051,6 +1028,12 @@ void CollectVariablesTraverser::recordInterfaceBlock(const char *instanceName,
         interfaceBlock->layout           = GetBlockLayoutType(blockType->blockStorage());
     }
 
+    // Consider an SSBO readonly if all its fields are readonly.  Note that ANGLE doesn't keep the
+    // readonly qualifier applied to the interface block itself, but rather applies it to the
+    // fields.
+    ASSERT(!interfaceBlockType.getMemoryQualifier().readonly);
+    bool isReadOnly = true;
+
     // Gather field information
     bool anyFieldStaticallyUsed = false;
 
@@ -1074,14 +1057,25 @@ void CollectVariablesTraverser::recordInterfaceBlock(const char *instanceName,
         }
 
         ShaderVariable fieldVariable;
-        setFieldProperties(fieldType, field->name(), staticUse, false, false, &fieldVariable);
+        setFieldProperties(fieldType, field->name(), staticUse, false, false, field->symbolType(),
+                           &fieldVariable);
         fieldVariable.isRowMajorLayout =
             (fieldType.getLayoutQualifier().matrixPacking == EmpRowMajor);
         interfaceBlock->fields.push_back(fieldVariable);
+
+        // The SSBO is not readonly if any field is not readonly.
+        if (!fieldType.getMemoryQualifier().readonly)
+        {
+            isReadOnly = false;
+        }
     }
     if (anyFieldStaticallyUsed)
     {
         interfaceBlock->staticUse = true;
+    }
+    if (interfaceBlock->blockType == BlockType::BLOCK_BUFFER)
+    {
+        interfaceBlock->isReadOnly = isReadOnly;
     }
 }
 
@@ -1092,10 +1086,11 @@ ShaderVariable CollectVariablesTraverser::recordUniform(const TIntermSymbol &var
     uniform.binding = variable.getType().getLayoutQualifier().binding;
     uniform.imageUnitFormat =
         GetImageInternalFormatType(variable.getType().getLayoutQualifier().imageInternalFormat);
-    uniform.location  = variable.getType().getLayoutQualifier().location;
-    uniform.offset    = variable.getType().getLayoutQualifier().offset;
-    uniform.readonly  = variable.getType().getMemoryQualifier().readonly;
-    uniform.writeonly = variable.getType().getMemoryQualifier().writeonly;
+    uniform.location      = variable.getType().getLayoutQualifier().location;
+    uniform.offset        = variable.getType().getLayoutQualifier().offset;
+    uniform.rasterOrdered = variable.getType().getLayoutQualifier().rasterOrdered;
+    uniform.readonly      = variable.getType().getMemoryQualifier().readonly;
+    uniform.writeonly     = variable.getType().getMemoryQualifier().writeonly;
     return uniform;
 }
 
@@ -1151,6 +1146,10 @@ bool CollectVariablesTraverser::visitDeclaration(Visit, TIntermDeclaration *node
                     break;
                 case EvqBuffer:
                     mShaderStorageBlocks->push_back(interfaceBlock);
+                    break;
+                case EvqPixelLocalEXT:
+                    // EXT_shader_pixel_local_storage is completely self-contained within the
+                    // shader, so we don't need to gather any info on it.
                     break;
                 default:
                     UNREACHABLE();
@@ -1261,8 +1260,9 @@ bool CollectVariablesTraverser::visitBinary(Visit, TIntermBinary *binaryNode)
         {
             MarkActive(ioBlockVar);
         }
-        else
+        else if (qualifier != EvqPixelLocalEXT)
         {
+
             if (!namedBlock)
             {
                 namedBlock = findNamedInterfaceBlock(interfaceBlock->name());

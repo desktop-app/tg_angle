@@ -46,12 +46,15 @@ class OutputHLSL : public TIntermTraverser
                int numRenderTargets,
                int maxDualSourceDrawBuffers,
                const std::vector<ShaderVariable> &uniforms,
-               ShCompileOptions compileOptions,
+               const ShCompileOptions &compileOptions,
                sh::WorkGroupSize workGroupSize,
                TSymbolTable *symbolTable,
                PerformanceDiagnostics *perfDiagnostics,
                const std::map<int, const TInterfaceBlock *> &uniformBlockOptimizedMap,
-               const std::vector<InterfaceBlock> &shaderStorageBlocks);
+               const std::vector<InterfaceBlock> &shaderStorageBlocks,
+               uint8_t clipDistanceSize,
+               uint8_t cullDistanceSize,
+               bool isEarlyFragmentTestsSpecified);
 
     ~OutputHLSL() override;
 
@@ -128,7 +131,7 @@ class OutputHLSL : public TIntermTraverser
     void outputEqual(Visit visit, const TType &type, TOperator op, TInfoSinkBase &out);
     void outputAssign(Visit visit, const TType &type, TInfoSinkBase &out);
 
-    void writeEmulatedFunctionTriplet(TInfoSinkBase &out, Visit visit, TOperator op);
+    void writeEmulatedFunctionTriplet(TInfoSinkBase &out, Visit visit, const TFunction *function);
 
     // Returns true if it found a 'same symbol' initializer (initializer that references the
     // variable it's initting)
@@ -147,6 +150,8 @@ class OutputHLSL : public TIntermTraverser
     TString addArrayEqualityFunction(const TType &type);
     TString addArrayAssignmentFunction(const TType &type);
     TString addArrayConstructIntoFunction(const TType &type);
+    TString addFlatEvaluateFunction(const TType &type, const TType &parameterType);
+    TString addSampleEvaluateFunction(const TType &type);
 
     // Ensures if the type is a struct, the struct is defined
     void ensureStructDefined(const TType &type);
@@ -160,7 +165,7 @@ class OutputHLSL : public TIntermTraverser
     const TExtensionBehavior &mExtensionBehavior;
     const char *mSourcePath;
     const ShShaderOutput mOutputType;
-    ShCompileOptions mCompileOptions;
+    const ShCompileOptions &mCompileOptions;
 
     bool mInsideFunction;
     bool mInsideMain;
@@ -206,6 +211,11 @@ class OutputHLSL : public TIntermTraverser
     bool mUsesViewID;
     bool mUsesVertexID;
     bool mUsesFragDepth;
+    bool mUsesSampleID;
+    bool mUsesSamplePosition;
+    bool mUsesSampleMaskIn;
+    bool mUsesSampleMask;
+    bool mUsesNumSamples;
     bool mUsesNumWorkGroups;
     bool mUsesWorkGroupID;
     bool mUsesLocalInvocationID;
@@ -220,6 +230,8 @@ class OutputHLSL : public TIntermTraverser
 
     int mNumRenderTargets;
     int mMaxDualSourceDrawBuffers;
+
+    TLayoutDepth mDepthLayout;
 
     int mUniqueIndex;  // For creating unique names
 
@@ -267,6 +279,19 @@ class OutputHLSL : public TIntermTraverser
     // arrays can't be return values in HLSL.
     std::vector<ArrayHelperFunction> mArrayConstructIntoFunctions;
 
+    struct FlatEvaluateFunction : public HelperFunction
+    {
+        TType type;
+        TType parameterType;
+    };
+    std::vector<FlatEvaluateFunction> mFlatEvaluateFunctions;
+
+    struct SampleEvaluateFunction : public HelperFunction
+    {
+        TType type;
+    };
+    std::vector<SampleEvaluateFunction> mSampleEvaluateFunctions;
+
     sh::WorkGroupSize mWorkGroupSize;
 
     PerformanceDiagnostics *mPerfDiagnostics;
@@ -280,6 +305,9 @@ class OutputHLSL : public TIntermTraverser
     bool needStructMapping(TIntermTyped *node);
 
     ShaderStorageBlockOutputHLSL *mSSBOOutputHLSL;
+    uint8_t mClipDistanceSize;
+    uint8_t mCullDistanceSize;
+    bool mIsEarlyFragmentTestsSpecified;
     bool mNeedStructMapping;
 };
 }  // namespace sh

@@ -12,11 +12,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
-
-// This type is defined here to simplify ANGLE's integration with glslang for SPIRv.
-using ShCompileOptions = uint64_t;
 
 namespace sh
 {
@@ -27,11 +25,15 @@ typedef unsigned int GLenum;
 enum InterpolationType
 {
     INTERPOLATION_SMOOTH,
+    INTERPOLATION_FLAT,
+    INTERPOLATION_NOPERSPECTIVE,
     INTERPOLATION_CENTROID,
     INTERPOLATION_SAMPLE,
-    INTERPOLATION_FLAT,
-    INTERPOLATION_NOPERSPECTIVE
+    INTERPOLATION_NOPERSPECTIVE_CENTROID,
+    INTERPOLATION_NOPERSPECTIVE_SAMPLE
 };
+
+const char *InterpolationTypeToString(InterpolationType type);
 
 // Validate link & SSO consistency of interpolation qualifiers
 bool InterpolationTypesMatch(InterpolationType a, InterpolationType b);
@@ -46,12 +48,17 @@ enum BlockLayoutType
     BLOCKLAYOUT_SHARED
 };
 
+const char *BlockLayoutTypeToString(BlockLayoutType type);
+
 // Interface Blocks, see section 4.3.9 of the ESSL 3.10 spec
 enum class BlockType
 {
     BLOCK_UNIFORM,
     BLOCK_BUFFER,
+    PIXEL_LOCAL_EXT,  // GL_EXT_shader_pixel_local_storage.
 };
+
+const char *BlockTypeToString(BlockType type);
 
 // Base class for all variables defined in shaders, including Varyings, Uniforms, etc
 // Note: we must override the copy constructor and assignment operator so we can
@@ -210,10 +217,11 @@ struct ShaderVariable
     int binding;
     GLenum imageUnitFormat;
     int offset;
+    bool rasterOrdered;
     bool readonly;
     bool writeonly;
 
-    // From EXT_shader_framebuffer_fetch
+    // From EXT_shader_framebuffer_fetch / KHR_blend_equation_advanced
     bool isFragmentInOut;
 
     // OutputVariable
@@ -284,6 +292,8 @@ struct InterfaceBlock
     int binding;
     bool staticUse;
     bool active;
+    // Only applied to SSBOs, |isReadOnly| tells if the readonly qualifier is specified.
+    bool isReadOnly;
     BlockType blockType;
     std::vector<ShaderVariable> fields;
 };

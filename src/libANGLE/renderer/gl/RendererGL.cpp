@@ -9,8 +9,10 @@
 #include "libANGLE/renderer/gl/RendererGL.h"
 
 #include <EGL/eglext.h>
+#include <thread>
 
 #include "common/debug.h"
+#include "common/system_utils.h"
 #include "libANGLE/AttributeMap.h"
 #include "libANGLE/Context.h"
 #include "libANGLE/Display.h"
@@ -25,6 +27,7 @@
 #include "libANGLE/renderer/gl/FenceNVGL.h"
 #include "libANGLE/renderer/gl/FramebufferGL.h"
 #include "libANGLE/renderer/gl/FunctionsGL.h"
+#include "libANGLE/renderer/gl/PLSProgramCache.h"
 #include "libANGLE/renderer/gl/ProgramGL.h"
 #include "libANGLE/renderer/gl/QueryGL.h"
 #include "libANGLE/renderer/gl/RenderbufferGL.h"
@@ -61,6 +64,11 @@ const char *kIgnoredErrors[] = {
     "FreeAllocationOnTimestamp - Reference to buffer created from "
     "different context without a share list. Application failed to pass "
     "share_context to eglCreateContext. Results are undefined.",
+    // http://crbug.com/1348684
+    "UpdateTimestamp - Reference to buffer created from different context without a share list. "
+    "Application failed to pass share_context to eglCreateContext. Results are undefined.",
+    "Attempt to use resource over contexts without enabling context sharing. App must pass a "
+    "share_context to eglCreateContext() to share resources.",
 };
 #endif  // defined(ANGLE_PLATFORM_ANDROID)
 
@@ -206,6 +214,7 @@ RendererGL::~RendererGL()
     SafeDelete(mBlitter);
     SafeDelete(mMultiviewClearer);
     SafeDelete(mStateManager);
+    SafeDelete(mPLSProgramCache);
 
     std::lock_guard<std::mutex> lock(mWorkerMutex);
 
@@ -215,8 +224,14 @@ RendererGL::~RendererGL()
 
 angle::Result RendererGL::flush()
 {
+    if (!mWorkDoneSinceLastFlush && !mNeedsFlushBeforeDeleteTextures)
+    {
+        return angle::Result::Continue;
+    }
+
     mFunctions->flush();
     mNeedsFlushBeforeDeleteTextures = false;
+    mWorkDoneSinceLastFlush         = false;
     return angle::Result::Continue;
 }
 
@@ -229,6 +244,7 @@ angle::Result RendererGL::finish()
 
     mFunctions->finish();
     mNeedsFlushBeforeDeleteTextures = false;
+    mWorkDoneSinceLastFlush         = false;
 
     if (mFeatures.finishDoesNotCauseQueriesToBeAvailable.enabled && mUseDebugOutput)
     {
@@ -268,7 +284,7 @@ void RendererGL::generateCaps(gl::Caps *outCaps,
 {
     nativegl_gl::GenerateCaps(mFunctions.get(), mFeatures, outCaps, outTextureCaps, outExtensions,
                               outLimitations, &mMaxSupportedESVersion,
-                              &mMultiviewImplementationType);
+                              &mMultiviewImplementationType, &mNativePLSOptions);
 }
 
 GLint RendererGL::getGPUDisjoint()
@@ -317,6 +333,20 @@ const gl::Limitations &RendererGL::getNativeLimitations() const
     return mNativeLimitations;
 }
 
+const ShPixelLocalStorageOptions &RendererGL::getNativePixelLocalStorageOptions() const
+{
+    return mNativePLSOptions;
+}
+
+PLSProgramCache *RendererGL::getPLSProgramCache()
+{
+    if (!mPLSProgramCache)
+    {
+        mPLSProgramCache = new PLSProgramCache(mFunctions.get(), mNativeCaps);
+    }
+    return mPLSProgramCache;
+}
+
 MultiviewImplementationTypeGL RendererGL::getMultiviewImplementationType() const
 {
     ensureCapsInitialized();
@@ -335,24 +365,34 @@ angle::Result RendererGL::dispatchCompute(const gl::Context *context,
                                           GLuint numGroupsZ)
 {
     mFunctions->dispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
+    mWorkDoneSinceLastFlush = true;
     return angle::Result::Continue;
 }
 
 angle::Result RendererGL::dispatchComputeIndirect(const gl::Context *context, GLintptr indirect)
 {
     mFunctions->dispatchComputeIndirect(indirect);
+    mWorkDoneSinceLastFlush = true;
     return angle::Result::Continue;
 }
 
 angle::Result RendererGL::memoryBarrier(GLbitfield barriers)
 {
     mFunctions->memoryBarrier(barriers);
+    mWorkDoneSinceLastFlush = true;
     return angle::Result::Continue;
 }
 angle::Result RendererGL::memoryBarrierByRegion(GLbitfield barriers)
 {
     mFunctions->memoryBarrierByRegion(barriers);
+    mWorkDoneSinceLastFlush = true;
     return angle::Result::Continue;
+}
+
+void RendererGL::framebufferFetchBarrier()
+{
+    mFunctions->framebufferFetchBarrierEXT();
+    mWorkDoneSinceLastFlush = true;
 }
 
 bool RendererGL::bindWorkerContext(std::string *infoLog)
@@ -362,7 +402,6 @@ bool RendererGL::bindWorkerContext(std::string *infoLog)
         return false;
     }
 
-    std::thread::id threadID = std::this_thread::get_id();
     std::lock_guard<std::mutex> lock(mWorkerMutex);
     std::unique_ptr<WorkerContext> workerContext;
     if (!mWorkerContextPool.empty())
@@ -386,16 +425,15 @@ bool RendererGL::bindWorkerContext(std::string *infoLog)
         mWorkerContextPool.push_back(std::move(workerContext));
         return false;
     }
-    mCurrentWorkerContexts[threadID] = std::move(workerContext);
+    mCurrentWorkerContexts[angle::GetCurrentThreadUniqueId()] = std::move(workerContext);
     return true;
 }
 
 void RendererGL::unbindWorkerContext()
 {
-    std::thread::id threadID = std::this_thread::get_id();
     std::lock_guard<std::mutex> lock(mWorkerMutex);
 
-    auto it = mCurrentWorkerContexts.find(threadID);
+    auto it = mCurrentWorkerContexts.find(angle::GetCurrentThreadUniqueId());
     ASSERT(it != mCurrentWorkerContexts.end());
     (*it).second->unmakeCurrent();
     mWorkerContextPool.push_back(std::move((*it).second));
@@ -429,6 +467,11 @@ void RendererGL::setMaxShaderCompilerThreads(GLuint count)
 void RendererGL::setNeedsFlushBeforeDeleteTextures()
 {
     mNeedsFlushBeforeDeleteTextures = true;
+}
+
+void RendererGL::markWorkSubmitted()
+{
+    mWorkDoneSinceLastFlush = true;
 }
 
 void RendererGL::flushIfNecessaryBeforeDeleteTextures()

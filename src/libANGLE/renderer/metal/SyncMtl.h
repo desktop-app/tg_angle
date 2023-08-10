@@ -1,5 +1,5 @@
 //
-// Copyright 2020 The ANGLE Project Authors. All rights reserved.
+// Copyright (c) 2020 The ANGLE Project Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -18,6 +18,8 @@
 #include "libANGLE/renderer/SyncImpl.h"
 #include "libANGLE/renderer/metal/mtl_common.h"
 
+#include "common/Optional.h"
+
 namespace egl
 {
 class AttributeMap;
@@ -33,7 +35,7 @@ namespace mtl
 
 // Common class to be used by both SyncImpl and EGLSyncImpl.
 // NOTE: SharedEvent is only declared on iOS 12.0+ or mac 10.14+
-#if ANGLE_MTL_EVENT_AVAILABLE
+#if defined(__IPHONE_12_0) || defined(__MAC_10_14)
 class Sync
 {
   public:
@@ -42,9 +44,15 @@ class Sync
 
     void onDestroy();
 
-    angle::Result initialize(ContextMtl *contextMtl);
+    angle::Result initialize(ContextMtl *contextMtl,
+                             id<MTLSharedEvent> sharedEvent,
+                             Optional<uint64_t> signalValue);
 
-    angle::Result set(ContextMtl *contextMtl, GLenum condition, GLbitfield flags);
+    angle::Result set(ContextMtl *contextMtl,
+                      GLenum condition,
+                      GLbitfield flags,
+                      id<MTLSharedEvent> sharedEvent,
+                      Optional<uint64_t> signalValue);
     angle::Result clientWait(ContextMtl *contextMtl,
                              bool flushCommands,
                              uint64_t timeout,
@@ -52,14 +60,16 @@ class Sync
     void serverWait(ContextMtl *contextMtl);
     angle::Result getStatus(bool *signaled);
 
+    void *copySharedEvent() const;
+
   private:
     SharedEventRef mMetalSharedEvent;
-    uint64_t mSetCounter = 0;
+    uint64_t mSignalValue = 0;
 
     std::shared_ptr<std::condition_variable> mCv;
     std::shared_ptr<std::mutex> mLock;
 };
-#else   // #if ANGLE_MTL_EVENT_AVAILABLE
+#else   // #if defined(__IPHONE_12_0) || defined(__MAC_10_14)
 class Sync
 {
   public:
@@ -89,8 +99,14 @@ class Sync
         UNREACHABLE();
         return angle::Result::Stop;
     }
+
+    void *copySharedEvent() const
+    {
+        UNREACHABLE();
+        return nullptr;
+    }
 };
-#endif  // #if ANGLE_MTL_EVENT_AVAILABLE
+#endif  // #if defined(__IPHONE_12_0) || defined(__MAC_10_14)
 }  // namespace mtl
 
 class FenceNVMtl : public FenceNVImpl
@@ -98,9 +114,7 @@ class FenceNVMtl : public FenceNVImpl
   public:
     FenceNVMtl();
     ~FenceNVMtl() override;
-
     void onDestroy(const gl::Context *context) override;
-
     angle::Result set(const gl::Context *context, GLenum condition) override;
     angle::Result test(const gl::Context *context, GLboolean *outFinished) override;
     angle::Result finish(const gl::Context *context) override;
@@ -152,8 +166,15 @@ class EGLSyncMtl final : public EGLSyncImpl
                           EGLint flags) override;
     egl::Error getStatus(const egl::Display *display, EGLint *outStatus) override;
 
+    egl::Error copyMetalSharedEventANGLE(const egl::Display *display, void **result) const override;
+    egl::Error dupNativeFenceFD(const egl::Display *display, EGLint *result) const override;
+
   private:
     mtl::Sync mSync;
+    id<MTLSharedEvent> mSharedEvent;
+    Optional<uint64_t> mSignalValue;
+    EGLenum mType;
+    EGLenum mCondition;
 };
 
 }  // namespace rx

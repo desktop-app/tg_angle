@@ -83,14 +83,7 @@ class PackedEnumMap
         // We use a for loop instead of range-for to work around a limitation in MSVC.
         for (const InitPair *it = init.begin(); it != init.end(); ++it)
         {
-#if (__cplusplus < 201703L)
-            // This horrible const_cast pattern is necessary to work around a constexpr limitation.
-            // See https://stackoverflow.com/q/34199774/ . Note that it should be fixed with C++17.
-            const_cast<T &>(const_cast<const Storage &>(
-                mPrivateData)[static_cast<UnderlyingType>(it->first)]) = it->second;
-#else
             mPrivateData[static_cast<UnderlyingType>(it->first)] = it->second;
-#endif
         }
     }
 
@@ -176,6 +169,23 @@ template <typename E, typename DataT = uint32_t>
 using PackedEnumBitSet = BitSetT<EnumSize<E>(), DataT, E>;
 
 }  // namespace angle
+
+#define ANGLE_DEFINE_ID_TYPE(Type)          \
+    class Type;                             \
+    struct Type##ID                         \
+    {                                       \
+        GLuint value;                       \
+    };                                      \
+    template <>                             \
+    struct ResourceTypeToID<Type>           \
+    {                                       \
+        using IDType = Type##ID;            \
+    };                                      \
+    template <>                             \
+    struct IsResourceIDType<Type##ID>       \
+    {                                       \
+        static constexpr bool value = true; \
+    };
 
 namespace gl
 {
@@ -341,23 +351,72 @@ enum class BlendEquationType
     Unused          = 3,
     Subtract        = 4,  // GLenum == 0x800A
     ReverseSubtract = 5,  // GLenum == 0x800B
-    InvalidEnum     = 6,
-    EnumCount       = 6
+
+    Multiply   = 6,   // GLenum == 0x9294
+    Screen     = 7,   // GLenum == 0x9295
+    Overlay    = 8,   // GLenum == 0x9296
+    Darken     = 9,   // GLenum == 0x9297
+    Lighten    = 10,  // GLenum == 0x9298
+    Colordodge = 11,  // GLenum == 0x9299
+    Colorburn  = 12,  // GLenum == 0x929A
+    Hardlight  = 13,  // GLenum == 0x929B
+    Softlight  = 14,  // GLenum == 0x929C
+    Unused2    = 15,
+    Difference = 16,  // GLenum == 0x929E
+    Unused3    = 17,
+    Exclusion  = 18,  // GLenum == 0x92A0
+
+    HslHue        = 19,  // GLenum == 0x92AD
+    HslSaturation = 20,  // GLenum == 0x92AE
+    HslColor      = 21,  // GLenum == 0x92AF
+    HslLuminosity = 22,  // GLenum == 0x92B0
+
+    InvalidEnum = 23,
+    EnumCount   = InvalidEnum
 };
+
+using BlendEquationBitSet = angle::PackedEnumBitSet<gl::BlendEquationType>;
 
 template <>
 constexpr BlendEquationType FromGLenum<BlendEquationType>(GLenum from)
 {
-    const GLenum scaled = (from - GL_FUNC_ADD);
-    return (scaled == static_cast<GLenum>(BlendEquationType::Unused) ||
-            scaled >= static_cast<GLenum>(BlendEquationType::EnumCount))
-               ? BlendEquationType::InvalidEnum
-               : static_cast<BlendEquationType>(scaled);
+    if (from <= GL_FUNC_REVERSE_SUBTRACT)
+    {
+        const GLenum scaled = (from - GL_FUNC_ADD);
+        return (scaled == static_cast<GLenum>(BlendEquationType::Unused))
+                   ? BlendEquationType::InvalidEnum
+                   : static_cast<BlendEquationType>(scaled);
+    }
+    if (from <= GL_EXCLUSION_KHR)
+    {
+        const GLenum scaled =
+            (from - GL_MULTIPLY_KHR + static_cast<uint32_t>(BlendEquationType::Multiply));
+        return (scaled == static_cast<GLenum>(BlendEquationType::Unused2) ||
+                scaled == static_cast<GLenum>(BlendEquationType::Unused3))
+                   ? BlendEquationType::InvalidEnum
+                   : static_cast<BlendEquationType>(scaled);
+    }
+    if (from <= GL_HSL_LUMINOSITY_KHR)
+    {
+        return static_cast<BlendEquationType>(from - GL_HSL_HUE_KHR +
+                                              static_cast<uint32_t>(BlendEquationType::HslHue));
+    }
+    return BlendEquationType::InvalidEnum;
 }
 
 constexpr GLenum ToGLenum(BlendEquationType from)
 {
-    return static_cast<GLenum>(from) + GL_FUNC_ADD;
+    if (from <= BlendEquationType::ReverseSubtract)
+    {
+        return static_cast<GLenum>(from) + GL_FUNC_ADD;
+    }
+    if (from <= BlendEquationType::Exclusion)
+    {
+        return static_cast<GLenum>(from) - static_cast<GLenum>(BlendEquationType::Multiply) +
+               GL_MULTIPLY_KHR;
+    }
+    return static_cast<GLenum>(from) - static_cast<GLenum>(BlendEquationType::HslHue) +
+           GL_HSL_HUE_KHR;
 }
 
 ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Add, GL_FUNC_ADD);
@@ -365,6 +424,21 @@ ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Min, GL_MIN);
 ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Max, GL_MAX);
 ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Subtract, GL_FUNC_SUBTRACT);
 ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, ReverseSubtract, GL_FUNC_REVERSE_SUBTRACT);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Multiply, GL_MULTIPLY_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Screen, GL_SCREEN_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Overlay, GL_OVERLAY_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Darken, GL_DARKEN_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Lighten, GL_LIGHTEN_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Colordodge, GL_COLORDODGE_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Colorburn, GL_COLORBURN_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Hardlight, GL_HARDLIGHT_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Softlight, GL_SOFTLIGHT_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Difference, GL_DIFFERENCE_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, Exclusion, GL_EXCLUSION_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, HslHue, GL_HSL_HUE_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, HslSaturation, GL_HSL_SATURATION_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, HslColor, GL_HSL_COLOR_KHR);
+ANGLE_VALIDATE_PACKED_ENUM(BlendEquationType, HslLuminosity, GL_HSL_LUMINOSITY_KHR);
 
 std::ostream &operator<<(std::ostream &os, BlendEquationType value);
 
@@ -619,45 +693,26 @@ struct ResourceTypeToID;
 template <typename T>
 struct IsResourceIDType;
 
-// Clang Format doesn't like the following X macro.
-// clang-format off
-#define ANGLE_ID_TYPES_OP(X) \
-    X(Buffer)                \
-    X(FenceNV)               \
-    X(Framebuffer)           \
-    X(MemoryObject)          \
-    X(Path)                  \
-    X(ProgramPipeline)       \
-    X(Query)                 \
-    X(Renderbuffer)          \
-    X(Sampler)               \
-    X(Semaphore)             \
-    X(Texture)               \
-    X(TransformFeedback)     \
+#define ANGLE_GL_ID_TYPES_OP(X) \
+    X(Buffer)                   \
+    X(Context)                  \
+    X(FenceNV)                  \
+    X(Framebuffer)              \
+    X(MemoryObject)             \
+    X(Path)                     \
+    X(ProgramPipeline)          \
+    X(Query)                    \
+    X(Renderbuffer)             \
+    X(Sampler)                  \
+    X(Semaphore)                \
+    X(Sync)                     \
+    X(Texture)                  \
+    X(TransformFeedback)        \
     X(VertexArray)
-// clang-format on
 
-#define ANGLE_DEFINE_ID_TYPE(Type)          \
-    class Type;                             \
-    struct Type##ID                         \
-    {                                       \
-        GLuint value;                       \
-    };                                      \
-    template <>                             \
-    struct ResourceTypeToID<Type>           \
-    {                                       \
-        using IDType = Type##ID;            \
-    };                                      \
-    template <>                             \
-    struct IsResourceIDType<Type##ID>       \
-    {                                       \
-        static constexpr bool value = true; \
-    };
+ANGLE_GL_ID_TYPES_OP(ANGLE_DEFINE_ID_TYPE)
 
-ANGLE_ID_TYPES_OP(ANGLE_DEFINE_ID_TYPE)
-
-#undef ANGLE_DEFINE_ID_TYPE
-#undef ANGLE_ID_TYPES_OP
+#undef ANGLE_GL_ID_TYPES_OP
 
 // Shaders and programs are a bit special as they share IDs.
 struct ShaderProgramID
@@ -741,6 +796,81 @@ inline GLuint GetIDValue(ResourceIDType id)
     return id.value;
 }
 
+struct UniformLocation
+{
+    int value;
+};
+
+bool operator<(const UniformLocation &lhs, const UniformLocation &rhs);
+
+struct UniformBlockIndex
+{
+    uint32_t value;
+};
+
+bool IsEmulatedCompressedFormat(GLenum format);
+}  // namespace gl
+
+namespace egl
+{
+MessageType ErrorCodeToMessageType(EGLint errorCode);
+
+struct Config;
+class Device;
+class Display;
+class Image;
+class Surface;
+class Stream;
+class Sync;
+
+#define ANGLE_EGL_ID_TYPES_OP(X) \
+    X(Image)                     \
+    X(Surface)                   \
+    X(Sync)
+
+template <typename T>
+struct ResourceTypeToID;
+
+template <typename T>
+struct IsResourceIDType;
+
+ANGLE_EGL_ID_TYPES_OP(ANGLE_DEFINE_ID_TYPE)
+
+#undef ANGLE_EGL_ID_TYPES_OP
+
+template <>
+struct IsResourceIDType<gl::ContextID>
+{
+    static constexpr bool value = true;
+};
+
+template <typename T>
+struct IsResourceIDType
+{
+    static constexpr bool value = false;
+};
+
+// Util funcs for resourceIDs
+template <typename T>
+typename std::enable_if<IsResourceIDType<T>::value && !std::is_same<T, gl::ContextID>::value,
+                        bool>::type
+operator==(const T &lhs, const T &rhs)
+{
+    return lhs.value == rhs.value;
+}
+}  // namespace egl
+
+#undef ANGLE_DEFINE_ID_TYPE
+
+namespace egl_gl
+{
+gl::TextureTarget EGLCubeMapTargetToCubeMapTarget(EGLenum eglTarget);
+gl::TextureTarget EGLImageTargetToTextureTarget(EGLenum eglTarget);
+gl::TextureType EGLTextureTargetToTextureType(EGLenum eglTarget);
+}  // namespace egl_gl
+
+namespace gl
+{
 // First case: handling packed enums.
 template <typename EnumT, typename FromT>
 typename std::enable_if<std::is_enum<EnumT>::value, EnumT>::type PackParam(FromT from)
@@ -756,35 +886,42 @@ PackParam(FromT from)
     return {from};
 }
 
-// Third case: handling pointer resource ids.
+template <typename EnumT>
+using IsEGLImage = std::is_same<EnumT, egl::ImageID>;
+
+template <typename EnumT>
+using IsGLSync = std::is_same<EnumT, gl::SyncID>;
+
+template <typename EnumT>
+using IsEGLSync = std::is_same<EnumT, egl::SyncID>;
+
+// Third case: handling EGLImage, GLSync and EGLSync pointer resource ids.
 template <typename EnumT, typename FromT>
-typename std::enable_if<std::is_pointer<FromT>::value && !std::is_enum<EnumT>::value, EnumT>::type
+typename std::enable_if<IsEGLImage<EnumT>::value || IsGLSync<EnumT>::value ||
+                            IsEGLSync<EnumT>::value,
+                        EnumT>::type
 PackParam(FromT from)
 {
-    return reinterpret_cast<EnumT>(from);
+    return {static_cast<GLuint>(reinterpret_cast<uintptr_t>(from))};
 }
 
-struct UniformLocation
+// Fourth case: handling non-EGLImage non-GLsync resource ids.
+template <typename EnumT, typename FromT>
+typename std::enable_if<std::is_pointer<FromT>::value && !std::is_enum<EnumT>::value &&
+                            !IsEGLImage<EnumT>::value && !IsGLSync<EnumT>::value,
+                        EnumT>::type
+PackParam(FromT from)
 {
-    int value;
-};
-
-struct UniformBlockIndex
-{
-    uint32_t value;
-};
+    static_assert(sizeof(typename std::remove_pointer<EnumT>::type) ==
+                      sizeof(typename std::remove_pointer<FromT>::type),
+                  "Types have different sizes");
+    static_assert(
+        std::is_same<
+            decltype(std::remove_pointer<EnumT>::type::value),
+            typename std::remove_const<typename std::remove_pointer<FromT>::type>::type>::value,
+        "Data types are different");
+    return reinterpret_cast<EnumT>(from);
+}
 }  // namespace gl
-
-namespace egl
-{
-MessageType ErrorCodeToMessageType(EGLint errorCode);
-}  // namespace egl
-
-namespace egl_gl
-{
-gl::TextureTarget EGLCubeMapTargetToCubeMapTarget(EGLenum eglTarget);
-gl::TextureTarget EGLImageTargetToTextureTarget(EGLenum eglTarget);
-gl::TextureType EGLTextureTargetToTextureType(EGLenum eglTarget);
-}  // namespace egl_gl
 
 #endif  // COMMON_PACKEDGLENUMS_H_

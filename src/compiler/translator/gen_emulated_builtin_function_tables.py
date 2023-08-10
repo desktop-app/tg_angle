@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # Copyright 2017 The ANGLE Project Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -122,9 +122,9 @@ def main():
         outputs = [hlsl_fname]
 
         if sys.argv[1] == 'inputs':
-            print ','.join(inputs)
+            print(','.join(inputs))
         elif sys.argv[1] == 'outputs':
-            print ','.join(outputs)
+            print(','.join(outputs))
         else:
             print('Invalid script parameters')
             return 1
@@ -137,7 +137,7 @@ def main():
         emulated_functions += gen_emulated_function(item)
 
     hlsl_gen = template_emulated_builtin_functions_hlsl.format(
-        script_name=sys.argv[0],
+        script_name=os.path.basename(sys.argv[0]),
         data_source_name=input_script,
         emulated_functions="".join(emulated_functions))
 

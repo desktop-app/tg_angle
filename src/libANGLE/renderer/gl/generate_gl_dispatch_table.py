@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # Copyright 2017 The ANGLE Project Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -116,11 +116,11 @@ DispatchTableGL::DispatchTableGL() = default;
 
 void DispatchTableGL::initProcsDesktopGL(const gl::Version &version, const std::set<std::string> &extensions)
 {{
-#if defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#if defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
 {gl_extensions_data}
 
 {gl_data}
-#endif  // defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#endif  // defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
 }}
 
 void DispatchTableGL::initProcsGLES(const gl::Version &version, const std::set<std::string> &extensions)
@@ -138,11 +138,11 @@ void DispatchTableGL::initProcsSharedExtensions(const std::set<std::string> &ext
 #if defined(ANGLE_ENABLE_OPENGL_NULL)
 void DispatchTableGL::initProcsDesktopGLNULL(const gl::Version &version, const std::set<std::string> &extensions)
 {{
-#if defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#if defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
 {gl_null_extensions_data}
 
 {gl_null_data}
-#endif  // defined(ANGLE_ENABLE_OPENGL_DESKTOP)
+#endif  // defined(ANGLE_ENABLE_GL_DESKTOP_BACKEND)
 }}
 
 void DispatchTableGL::initProcsGLESNULL(const gl::Version &version, const std::set<std::string> &extensions)
@@ -249,7 +249,7 @@ def main():
     # auto_script parameters.
     if len(sys.argv) > 1:
         inputs = [
-            '../../../../scripts/gl.xml',
+            '../../../../third_party/OpenGL-Registry/src/xml/gl.xml',
             '../angle_format.py',
             'gl_bindings_data.json',
         ]
@@ -261,15 +261,16 @@ def main():
         ]
 
         if sys.argv[1] == 'inputs':
-            print ','.join(inputs)
+            print(','.join(inputs))
         elif sys.argv[1] == 'outputs':
-            print ','.join(outputs)
+            print(','.join(outputs))
         else:
             print('Invalid script parameters')
             return 1
         return 0
 
-    gl_xml_path = os.path.join('..', '..', '..', '..', 'scripts', 'gl.xml')
+    gl_xml_path = os.path.join('..', '..', '..', '..', 'third_party', 'OpenGL-Registry', 'src',
+                               'xml', 'gl.xml')
     dispatch_header_path = 'DispatchTableGL_autogen.h'
     dispatch_source_path = 'DispatchTableGL_autogen.cpp'
     null_functions_header_path = 'null_functions.h'
@@ -331,7 +332,7 @@ def main():
     # Used later in the NULL bindings.
     all_entry_points = []
 
-    for comment, entry_points in json_data.iteritems():
+    for comment, entry_points in sorted(json_data.items()):
         for entry_point_no_prefix in entry_points:
             entry_point = "gl" + entry_point_no_prefix
 
@@ -398,7 +399,7 @@ def main():
                 raise Exception('Entry point ' + entry_point + ' not found in the xml.')
 
     table_data = []
-    for comment, entry_points in sorted(json_data.iteritems()):
+    for comment, entry_points in sorted(json_data.items()):
         formatted = ["    // " + comment]
         formatted += [format_ep_decl(entry_point) for entry_point in sorted(entry_points)]
 
@@ -414,25 +415,25 @@ def main():
         out.write(dispatch_table_header)
 
     gl_data = []
-    for gl_required, entry_points in sorted(gl_requirements.iteritems()):
+    for gl_required, entry_points in sorted(gl_requirements.items()):
         gl_data.append(format_requirements_lines(gl_required, entry_points))
 
     gl_extensions_data = []
-    for extension, entry_points in sorted(gl_extension_requirements.iteritems()):
+    for extension, entry_points in sorted(gl_extension_requirements.items()):
         gl_extensions_data.append(
             format_extension_requirements_lines(extension, entry_points, "gl"))
 
     gles2_data = []
-    for gles2_required, entry_points in sorted(gles2_requirements.iteritems()):
+    for gles2_required, entry_points in sorted(gles2_requirements.items()):
         gles2_data.append(format_requirements_lines(gles2_required, entry_points))
 
     gles2_extensions_data = []
-    for extension, entry_points in sorted(gles2_extension_requirements.iteritems()):
+    for extension, entry_points in sorted(gles2_extension_requirements.items()):
         gles2_extensions_data.append(
             format_extension_requirements_lines(extension, entry_points, "gles2"))
 
     both_extensions_data = []
-    for extension, entry_points in sorted(both_extension_requirements.iteritems()):
+    for extension, entry_points in sorted(both_extension_requirements.items()):
         both_extensions_data.append(
             format_extension_requirements_lines(extension, entry_points, "gles2|gl"))
 

@@ -20,6 +20,7 @@
 #include "libANGLE/Debug.h"
 #include "libANGLE/Framebuffer.h"
 #include "libANGLE/FramebufferAttachment.h"
+#include "libANGLE/PixelLocalStorage.h"
 #include "libANGLE/Query.h"
 #include "libANGLE/VertexArray.h"
 #include "libANGLE/formatutils.h"
@@ -118,10 +119,10 @@ uint32_t gIDCounter = 1;
 }  // namespace
 
 template <typename BindingT, typename... ArgsT>
-ANGLE_INLINE void UpdateNonTFBufferBinding(const Context *context,
-                                           BindingT *binding,
-                                           Buffer *buffer,
-                                           ArgsT... args)
+ANGLE_INLINE void UpdateNonTFBufferBindingWebGL(const Context *context,
+                                                BindingT *binding,
+                                                Buffer *buffer,
+                                                ArgsT... args)
 {
     Buffer *oldBuffer = binding->get();
     if (oldBuffer)
@@ -138,7 +139,10 @@ ANGLE_INLINE void UpdateNonTFBufferBinding(const Context *context,
 }
 
 template <typename BindingT, typename... ArgsT>
-void UpdateTFBufferBinding(const Context *context, BindingT *binding, bool indexed, ArgsT... args)
+void UpdateTFBufferBindingWebGL(const Context *context,
+                                BindingT *binding,
+                                bool indexed,
+                                ArgsT... args)
 {
     if (binding->get())
         (*binding)->onTFBindingChanged(context, false, indexed);
@@ -152,13 +156,20 @@ void UpdateBufferBinding(const Context *context,
                          Buffer *buffer,
                          BufferBinding target)
 {
-    if (target == BufferBinding::TransformFeedback)
+    if (context->isWebGL())
     {
-        UpdateTFBufferBinding(context, binding, false, buffer);
+        if (target == BufferBinding::TransformFeedback)
+        {
+            UpdateTFBufferBindingWebGL(context, binding, false, buffer);
+        }
+        else
+        {
+            UpdateNonTFBufferBindingWebGL(context, binding, buffer);
+        }
     }
     else
     {
-        UpdateNonTFBufferBinding(context, binding, buffer);
+        binding->set(context, buffer);
     }
 }
 
@@ -169,13 +180,20 @@ void UpdateIndexedBufferBinding(const Context *context,
                                 GLintptr offset,
                                 GLsizeiptr size)
 {
-    if (target == BufferBinding::TransformFeedback)
+    if (context->isWebGL())
     {
-        UpdateTFBufferBinding(context, binding, true, buffer, offset, size);
+        if (target == BufferBinding::TransformFeedback)
+        {
+            UpdateTFBufferBindingWebGL(context, binding, true, buffer, offset, size);
+        }
+        else
+        {
+            UpdateNonTFBufferBindingWebGL(context, binding, buffer, offset, size);
+        }
     }
     else
     {
-        UpdateNonTFBufferBinding(context, binding, buffer, offset, size);
+        binding->set(context, buffer, offset, size);
     }
 }
 
@@ -183,21 +201,43 @@ void UpdateIndexedBufferBinding(const Context *context,
 template <BufferBinding Target>
 void State::setGenericBufferBindingWithBit(const Context *context, Buffer *buffer)
 {
-    UpdateNonTFBufferBinding(context, &mBoundBuffers[Target], buffer);
+    if (context->isWebGL())
+    {
+        UpdateNonTFBufferBindingWebGL(context, &mBoundBuffers[Target], buffer);
+    }
+    else
+    {
+        mBoundBuffers[Target].set(context, buffer);
+    }
     mDirtyBits.set(kBufferBindingDirtyBits[Target]);
 }
 
 template <BufferBinding Target>
 void State::setGenericBufferBinding(const Context *context, Buffer *buffer)
 {
-    UpdateNonTFBufferBinding(context, &mBoundBuffers[Target], buffer);
+    if (context->isWebGL())
+    {
+        UpdateNonTFBufferBindingWebGL(context, &mBoundBuffers[Target], buffer);
+    }
+    else
+    {
+        mBoundBuffers[Target].set(context, buffer);
+    }
 }
 
 template <>
 void State::setGenericBufferBinding<BufferBinding::TransformFeedback>(const Context *context,
                                                                       Buffer *buffer)
 {
-    UpdateTFBufferBinding(context, &mBoundBuffers[BufferBinding::TransformFeedback], false, buffer);
+    if (context->isWebGL())
+    {
+        UpdateTFBufferBindingWebGL(context, &mBoundBuffers[BufferBinding::TransformFeedback], false,
+                                   buffer);
+    }
+    else
+    {
+        mBoundBuffers[BufferBinding::TransformFeedback].set(context, buffer);
+    }
 }
 
 template <>
@@ -208,14 +248,22 @@ void State::setGenericBufferBinding<BufferBinding::ElementArray>(const Context *
     if (oldBuffer)
     {
         oldBuffer->removeObserver(&mVertexArray->mState.mElementArrayBuffer);
-        oldBuffer->onNonTFBindingChanged(-1);
+        oldBuffer->removeContentsObserver(mVertexArray, kElementArrayBufferIndex);
+        if (context->isWebGL())
+        {
+            oldBuffer->onNonTFBindingChanged(-1);
+        }
         oldBuffer->release(context);
     }
     mVertexArray->mState.mElementArrayBuffer.assign(buffer);
     if (buffer)
     {
         buffer->addObserver(&mVertexArray->mState.mElementArrayBuffer);
-        buffer->onNonTFBindingChanged(1);
+        buffer->addContentsObserver(mVertexArray, kElementArrayBufferIndex);
+        if (context->isWebGL())
+        {
+            buffer->onNonTFBindingChanged(1);
+        }
         buffer->addRef();
     }
     mVertexArray->mDirtyBits.set(VertexArray::DIRTY_BIT_ELEMENT_ARRAY_BUFFER);
@@ -288,15 +336,22 @@ State::State(const State *shareContextState,
              const OverlayType *overlay,
              const EGLenum clientType,
              const Version &clientVersion,
+             EGLint profileMask,
              bool debug,
-             bool bindGeneratesResource,
+             bool bindGeneratesResourceCHROMIUM,
              bool clientArraysEnabled,
              bool robustResourceInit,
              bool programBinaryCacheEnabled,
-             EGLenum contextPriority)
+             EGLenum contextPriority,
+             bool hasRobustAccess,
+             bool hasProtectedContent)
     : mID({gIDCounter++}),
       mClientType(clientType),
+      mProfileMask(profileMask),
       mContextPriority(contextPriority),
+      mHasRobustAccess(hasRobustAccess),
+      mHasProtectedContent(hasProtectedContent),
+      mIsDebugContext(debug),
       mClientVersion(clientVersion),
       mShareGroup(shareGroup),
       mBufferManager(AllocateOrGetSharedResourceManager(shareContextState, &State::mBufferManager)),
@@ -317,8 +372,6 @@ State::State(const State *shareContextState,
       mSemaphoreManager(AllocateOrGetSharedResourceManager(shareContextState,
                                                            &State::mSemaphoreManager,
                                                            shareSemaphores)),
-      mMaxDrawBuffers(0),
-      mMaxCombinedTextureImageUnits(0),
       mDepthClearValue(0),
       mStencilClearValue(0),
       mScissorTest(false),
@@ -336,7 +389,7 @@ State::State(const State *shareContextState,
       mGenerateMipmapHint(GL_NONE),
       mTextureFilteringHint(GL_NONE),
       mFragmentShaderDerivativeHint(GL_NONE),
-      mBindGeneratesResource(bindGeneratesResource),
+      mBindGeneratesResource(bindGeneratesResourceCHROMIUM),
       mClientArraysEnabled(clientArraysEnabled),
       mNearZ(0),
       mFarZ(0),
@@ -355,24 +408,38 @@ State::State(const State *shareContextState,
       mRobustResourceInit(robustResourceInit),
       mProgramBinaryCacheEnabled(programBinaryCacheEnabled),
       mTextureRectangleEnabled(true),
+      mLogicOpEnabled(false),
+      mLogicOp(LogicalOperation::Copy),
       mMaxShaderCompilerThreads(std::numeric_limits<GLuint>::max()),
       mPatchVertices(3),
+      mPixelLocalStorageActivePlanes(0),
       mOverlay(overlay),
-      mNoSimultaneousConstantColorAndAlphaBlendFunc(false)
+      mNoSimultaneousConstantColorAndAlphaBlendFunc(false),
+      mSetBlendIndexedInvoked(false),
+      mSetBlendFactorsIndexedInvoked(false),
+      mSetBlendEquationsIndexedInvoked(false),
+      mDisplayTextureShareGroup(shareTextures != nullptr),
+      mBoundingBoxMinX(-1.0f),
+      mBoundingBoxMinY(-1.0f),
+      mBoundingBoxMinZ(-1.0f),
+      mBoundingBoxMinW(1.0f),
+      mBoundingBoxMaxX(1.0f),
+      mBoundingBoxMaxY(1.0f),
+      mBoundingBoxMaxZ(1.0f),
+      mBoundingBoxMaxW(1.0f),
+      mShadingRatePreserveAspectRatio(false),
+      mShadingRate(ShadingRate::Undefined),
+      mFetchPerSample(false)
 {}
 
 State::~State() {}
 
 void State::initialize(Context *context)
 {
-    const Caps &caps                   = context->getCaps();
-    const Extensions &extensions       = context->getExtensions();
     const Extensions &nativeExtensions = context->getImplementation()->getNativeExtensions();
     const Version &clientVersion       = context->getClientVersion();
 
-    mMaxDrawBuffers               = static_cast<GLuint>(caps.maxDrawBuffers);
-    mBlendStateExt                = BlendStateExt(mMaxDrawBuffers);
-    mMaxCombinedTextureImageUnits = static_cast<GLuint>(caps.maxCombinedTextureImageUnits);
+    mBlendStateExt = BlendStateExt(mCaps.maxDrawBuffers);
 
     setColorClearValue(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -397,7 +464,7 @@ void State::initialize(Context *context)
     mSampleCoverageValue  = 1.0f;
     mSampleCoverageInvert = false;
 
-    mMaxSampleMaskWords = static_cast<GLuint>(caps.maxSampleMaskWords);
+    mMaxSampleMaskWords = static_cast<GLuint>(mCaps.maxSampleMaskWords);
     mSampleMask         = false;
     mSampleMaskValues.fill(~GLbitfield(0));
 
@@ -414,12 +481,12 @@ void State::initialize(Context *context)
     mNearZ           = 0.0f;
     mFarZ            = 1.0f;
 
-    mClipControlOrigin = GL_LOWER_LEFT_EXT;
-    mClipControlDepth  = GL_NEGATIVE_ONE_TO_ONE_EXT;
+    mClipOrigin    = ClipOrigin::LowerLeft;
+    mClipDepthMode = ClipDepthMode::NegativeOneToOne;
 
     mActiveSampler = 0;
 
-    mVertexAttribCurrentValues.resize(caps.maxVertexAttributes);
+    mVertexAttribCurrentValues.resize(mCaps.maxVertexAttributes);
 
     // Set all indexes in state attributes type mask to float (default)
     for (int i = 0; i < MAX_VERTEX_ATTRIBS; i++)
@@ -427,58 +494,64 @@ void State::initialize(Context *context)
         SetComponentTypeMask(ComponentType::Float, i, &mCurrentValuesTypeMask);
     }
 
-    mUniformBuffers.resize(caps.maxUniformBufferBindings);
+    mUniformBuffers.resize(mCaps.maxUniformBufferBindings);
 
-    mSamplerTextures[TextureType::_2D].resize(caps.maxCombinedTextureImageUnits);
-    mSamplerTextures[TextureType::CubeMap].resize(caps.maxCombinedTextureImageUnits);
+    mSamplerTextures[TextureType::_2D].resize(mCaps.maxCombinedTextureImageUnits);
+    mSamplerTextures[TextureType::CubeMap].resize(mCaps.maxCombinedTextureImageUnits);
     if (clientVersion >= Version(3, 0) || nativeExtensions.texture3DOES)
     {
-        mSamplerTextures[TextureType::_3D].resize(caps.maxCombinedTextureImageUnits);
+        mSamplerTextures[TextureType::_3D].resize(mCaps.maxCombinedTextureImageUnits);
     }
     if (clientVersion >= Version(3, 0))
     {
-        mSamplerTextures[TextureType::_2DArray].resize(caps.maxCombinedTextureImageUnits);
+        mSamplerTextures[TextureType::_2DArray].resize(mCaps.maxCombinedTextureImageUnits);
     }
-    if (clientVersion >= Version(3, 1) || nativeExtensions.textureMultisample)
+    if (clientVersion >= Version(3, 1) || nativeExtensions.textureMultisampleANGLE)
     {
-        mSamplerTextures[TextureType::_2DMultisample].resize(caps.maxCombinedTextureImageUnits);
+        mSamplerTextures[TextureType::_2DMultisample].resize(mCaps.maxCombinedTextureImageUnits);
     }
     if (clientVersion >= Version(3, 1))
     {
         mSamplerTextures[TextureType::_2DMultisampleArray].resize(
-            caps.maxCombinedTextureImageUnits);
+            mCaps.maxCombinedTextureImageUnits);
 
-        mAtomicCounterBuffers.resize(caps.maxAtomicCounterBufferBindings);
-        mShaderStorageBuffers.resize(caps.maxShaderStorageBufferBindings);
-        mImageUnits.resize(caps.maxImageUnits);
+        mAtomicCounterBuffers.resize(mCaps.maxAtomicCounterBufferBindings);
+        mShaderStorageBuffers.resize(mCaps.maxShaderStorageBufferBindings);
     }
-    if (clientVersion >= Version(3, 2) || extensions.textureCubeMapArrayAny())
+    if (clientVersion >= Version(3, 1) ||
+        (context->getImplementation()->getNativePixelLocalStorageOptions().type ==
+         ShPixelLocalStorageType::ImageLoadStore))
     {
-        mSamplerTextures[TextureType::CubeMapArray].resize(caps.maxCombinedTextureImageUnits);
+        mImageUnits.resize(mCaps.maxImageUnits);
     }
-    if (clientVersion >= Version(3, 2) || extensions.textureBufferAny())
+    if (clientVersion >= Version(3, 1) || nativeExtensions.textureCubeMapArrayAny())
     {
-        mSamplerTextures[TextureType::Buffer].resize(caps.maxCombinedTextureImageUnits);
+        mSamplerTextures[TextureType::CubeMapArray].resize(mCaps.maxCombinedTextureImageUnits);
     }
-    if (nativeExtensions.textureRectangle)
+    if (clientVersion >= Version(3, 1) || nativeExtensions.textureCubeMapArrayAny())
     {
-        mSamplerTextures[TextureType::Rectangle].resize(caps.maxCombinedTextureImageUnits);
+        mSamplerTextures[TextureType::Buffer].resize(mCaps.maxCombinedTextureImageUnits);
     }
-    if (nativeExtensions.eglImageExternalOES || nativeExtensions.eglStreamConsumerExternalNV)
+    if (nativeExtensions.textureRectangleANGLE)
     {
-        mSamplerTextures[TextureType::External].resize(caps.maxCombinedTextureImageUnits);
+        mSamplerTextures[TextureType::Rectangle].resize(mCaps.maxCombinedTextureImageUnits);
     }
-    if (nativeExtensions.webglVideoTexture)
+    if (nativeExtensions.EGLImageExternalOES || nativeExtensions.EGLStreamConsumerExternalNV)
     {
-        mSamplerTextures[TextureType::VideoImage].resize(caps.maxCombinedTextureImageUnits);
+        mSamplerTextures[TextureType::External].resize(mCaps.maxCombinedTextureImageUnits);
     }
-    mCompleteTextureBindings.reserve(caps.maxCombinedTextureImageUnits);
-    for (int32_t textureIndex = 0; textureIndex < caps.maxCombinedTextureImageUnits; ++textureIndex)
+    if (nativeExtensions.videoTextureWEBGL)
+    {
+        mSamplerTextures[TextureType::VideoImage].resize(mCaps.maxCombinedTextureImageUnits);
+    }
+    mCompleteTextureBindings.reserve(mCaps.maxCombinedTextureImageUnits);
+    for (int32_t textureIndex = 0; textureIndex < mCaps.maxCombinedTextureImageUnits;
+         ++textureIndex)
     {
         mCompleteTextureBindings.emplace_back(context, textureIndex);
     }
 
-    mSamplers.resize(caps.maxCombinedTextureImageUnits);
+    mSamplers.resize(mCaps.maxCombinedTextureImageUnits);
 
     for (QueryType type : angle::AllEnums<QueryType>())
     {
@@ -493,7 +566,7 @@ void State::initialize(Context *context)
 
     mPrimitiveRestart = false;
 
-    mDebug.setMaxLoggedMessages(extensions.maxDebugLoggedMessages);
+    mDebug.setMaxLoggedMessages(mCaps.maxDebugLoggedMessages);
 
     mMultiSampling    = true;
     mSampleAlphaToOne = false;
@@ -502,7 +575,9 @@ void State::initialize(Context *context)
 
     mNoSimultaneousConstantColorAndAlphaBlendFunc =
         context->getLimitations().noSimultaneousConstantColorAndAlphaBlendFunc ||
-        context->getExtensions().webglCompatibility;
+        context->getExtensions().webglCompatibilityANGLE;
+
+    mNoUnclampedBlendColor = context->getLimitations().noUnclampedBlendColor;
 
     // GLES1 emulation: Initialize state for GLES1 if version applies
     // TODO(http://anglebug.com/3745): When on desktop client only do this in compatibility profile
@@ -514,7 +589,7 @@ void State::initialize(Context *context)
 
 void State::reset(const Context *context)
 {
-    // Force a sync so clear doesn't end up deferencing stale pointers.
+    // Force a sync so clear doesn't end up dereferencing stale pointers.
     (void)syncActiveTextures(context, Command::Other);
     mActiveTexturesCache.clear();
 
@@ -742,7 +817,7 @@ bool State::anyActiveDrawBufferChannelMasked() const
 {
     // Compare current color mask with all-enabled color mask, while ignoring disabled draw
     // buffers.
-    return (mBlendStateExt.compareColorMask(mBlendStateExt.mMaxColorMask) &
+    return (mBlendStateExt.compareColorMask(mBlendStateExt.getAllColorMaskBits()) &
             mDrawFramebuffer->getDrawBufferMask())
         .any();
 }
@@ -792,6 +867,16 @@ void State::setFrontFace(GLenum front)
     }
 }
 
+void State::setDepthClamp(bool enabled)
+{
+    if (mRasterizer.depthClamp != enabled)
+    {
+        mRasterizer.depthClamp = enabled;
+        mDirtyBits.set(DIRTY_BIT_EXTENDED);
+        mExtendedDirtyBits.set(EXTENDED_DIRTY_BIT_DEPTH_CLAMP_ENABLED);
+    }
+}
+
 void State::setDepthTest(bool enabled)
 {
     if (mDepthStencil.depthTest != enabled)
@@ -820,19 +905,19 @@ void State::setDepthRange(float zNear, float zFar)
     }
 }
 
-void State::setClipControl(GLenum origin, GLenum depth)
+void State::setClipControl(ClipOrigin origin, ClipDepthMode depth)
 {
     bool updated = false;
-    if (mClipControlOrigin != origin)
+    if (mClipOrigin != origin)
     {
-        mClipControlOrigin = origin;
-        updated            = true;
+        mClipOrigin = origin;
+        updated     = true;
     }
 
-    if (mClipControlDepth != depth)
+    if (mClipDepthMode != depth)
     {
-        mClipControlDepth = depth;
-        updated           = true;
+        mClipDepthMode = depth;
+        updated        = true;
     }
 
     if (updated)
@@ -844,20 +929,31 @@ void State::setClipControl(GLenum origin, GLenum depth)
 
 void State::setBlend(bool enabled)
 {
-    mBlendState.blend = enabled;
+    if (mSetBlendIndexedInvoked || mBlendState.blend != enabled)
+    {
+        mBlendState.blend = enabled;
 
-    mBlendStateExt.setEnabled(enabled);
-    mDirtyBits.set(DIRTY_BIT_BLEND_ENABLED);
+        mSetBlendIndexedInvoked = false;
+        mBlendStateExt.setEnabled(enabled);
+        mDirtyBits.set(DIRTY_BIT_BLEND_ENABLED);
+    }
 }
 
 void State::setBlendIndexed(bool enabled, GLuint index)
 {
+    mSetBlendIndexedInvoked = true;
     mBlendStateExt.setEnabledIndexed(index, enabled);
     mDirtyBits.set(DIRTY_BIT_BLEND_ENABLED);
 }
 
 void State::setBlendFactors(GLenum sourceRGB, GLenum destRGB, GLenum sourceAlpha, GLenum destAlpha)
 {
+    if (!mSetBlendFactorsIndexedInvoked && mBlendState.sourceBlendRGB == sourceRGB &&
+        mBlendState.destBlendRGB == destRGB && mBlendState.sourceBlendAlpha == sourceAlpha &&
+        mBlendState.destBlendAlpha == destAlpha)
+    {
+        return;
+    }
 
     mBlendState.sourceBlendRGB   = sourceRGB;
     mBlendState.destBlendRGB     = destRGB;
@@ -885,6 +981,7 @@ void State::setBlendFactors(GLenum sourceRGB, GLenum destRGB, GLenum sourceAlpha
         }
     }
 
+    mSetBlendFactorsIndexedInvoked = false;
     mBlendStateExt.setFactors(sourceRGB, destRGB, sourceAlpha, destAlpha);
     mDirtyBits.set(DIRTY_BIT_BLEND_FUNCS);
 }
@@ -901,6 +998,7 @@ void State::setBlendFactorsIndexed(GLenum sourceRGB,
         mBlendFuncConstantAlphaDrawBuffers.set(index, hasConstantAlpha(sourceRGB, destRGB));
     }
 
+    mSetBlendFactorsIndexedInvoked = true;
     mBlendStateExt.setFactorsIndexed(index, sourceRGB, destRGB, sourceAlpha, destAlpha);
     mDirtyBits.set(DIRTY_BIT_BLEND_FUNCS);
 }
@@ -911,9 +1009,9 @@ void State::setBlendColor(float red, float green, float blue, float alpha)
     // On ES3+, or with render-to-float exts enabled, it does not clamp on store.
     const bool isES2 = mClientVersion.major == 2;
     const bool hasFloatBlending =
-        mExtensions.colorBufferFloat || mExtensions.colorBufferHalfFloat ||
-        mExtensions.colorBufferFloatRGB || mExtensions.colorBufferFloatRGBA;
-    if (isES2 && !hasFloatBlending)
+        mExtensions.colorBufferFloatEXT || mExtensions.colorBufferHalfFloatEXT ||
+        mExtensions.colorBufferFloatRgbCHROMIUM || mExtensions.colorBufferFloatRgbaCHROMIUM;
+    if ((isES2 && !hasFloatBlending) || mNoUnclampedBlendColor)
     {
         red   = clamp01(red);
         green = clamp01(green);
@@ -921,24 +1019,34 @@ void State::setBlendColor(float red, float green, float blue, float alpha)
         alpha = clamp01(alpha);
     }
 
-    mBlendColor.red   = red;
-    mBlendColor.green = green;
-    mBlendColor.blue  = blue;
-    mBlendColor.alpha = alpha;
-    mDirtyBits.set(DIRTY_BIT_BLEND_COLOR);
+    if (mBlendColor.red != red || mBlendColor.green != green || mBlendColor.blue != blue ||
+        mBlendColor.alpha != alpha)
+    {
+        mBlendColor.red   = red;
+        mBlendColor.green = green;
+        mBlendColor.blue  = blue;
+        mBlendColor.alpha = alpha;
+        mDirtyBits.set(DIRTY_BIT_BLEND_COLOR);
+    }
 }
 
 void State::setBlendEquation(GLenum rgbEquation, GLenum alphaEquation)
 {
-    mBlendState.blendEquationRGB   = rgbEquation;
-    mBlendState.blendEquationAlpha = alphaEquation;
+    if (mSetBlendEquationsIndexedInvoked || mBlendState.blendEquationRGB != rgbEquation ||
+        mBlendState.blendEquationAlpha != alphaEquation)
+    {
+        mBlendState.blendEquationRGB   = rgbEquation;
+        mBlendState.blendEquationAlpha = alphaEquation;
 
-    mBlendStateExt.setEquations(rgbEquation, alphaEquation);
-    mDirtyBits.set(DIRTY_BIT_BLEND_EQUATIONS);
+        mSetBlendEquationsIndexedInvoked = false;
+        mBlendStateExt.setEquations(rgbEquation, alphaEquation);
+        mDirtyBits.set(DIRTY_BIT_BLEND_EQUATIONS);
+    }
 }
 
 void State::setBlendEquationIndexed(GLenum rgbEquation, GLenum alphaEquation, GLuint index)
 {
+    mSetBlendEquationsIndexedInvoked = true;
     mBlendStateExt.setEquationsIndexed(index, rgbEquation, alphaEquation);
     mDirtyBits.set(DIRTY_BIT_BLEND_EQUATIONS);
 }
@@ -1026,6 +1134,36 @@ void State::setStencilBackOperations(GLenum stencilBackFail,
     }
 }
 
+void State::setPolygonMode(PolygonMode mode)
+{
+    if (mRasterizer.polygonMode != mode)
+    {
+        mRasterizer.polygonMode = mode;
+        mDirtyBits.set(DIRTY_BIT_EXTENDED);
+        mExtendedDirtyBits.set(EXTENDED_DIRTY_BIT_POLYGON_MODE);
+    }
+}
+
+void State::setPolygonOffsetPoint(bool enabled)
+{
+    if (mRasterizer.polygonOffsetPoint != enabled)
+    {
+        mRasterizer.polygonOffsetPoint = enabled;
+        mDirtyBits.set(DIRTY_BIT_EXTENDED);
+        mExtendedDirtyBits.set(EXTENDED_DIRTY_BIT_POLYGON_OFFSET_POINT_ENABLED);
+    }
+}
+
+void State::setPolygonOffsetLine(bool enabled)
+{
+    if (mRasterizer.polygonOffsetLine != enabled)
+    {
+        mRasterizer.polygonOffsetLine = enabled;
+        mDirtyBits.set(DIRTY_BIT_EXTENDED);
+        mExtendedDirtyBits.set(EXTENDED_DIRTY_BIT_POLYGON_OFFSET_LINE_ENABLED);
+    }
+}
+
 void State::setPolygonOffsetFill(bool enabled)
 {
     if (mRasterizer.polygonOffsetFill != enabled)
@@ -1035,11 +1173,12 @@ void State::setPolygonOffsetFill(bool enabled)
     }
 }
 
-void State::setPolygonOffsetParams(GLfloat factor, GLfloat units)
+void State::setPolygonOffsetParams(GLfloat factor, GLfloat units, GLfloat clamp)
 {
     // An application can pass NaN values here, so handle this gracefully
     mRasterizer.polygonOffsetFactor = factor != factor ? 0.0f : factor;
     mRasterizer.polygonOffsetUnits  = units != units ? 0.0f : units;
+    mRasterizer.polygonOffsetClamp  = clamp != clamp ? 0.0f : clamp;
     mDirtyBits.set(DIRTY_BIT_POLYGON_OFFSET);
 }
 
@@ -1192,8 +1331,17 @@ void State::setEnableFeature(GLenum feature, bool enabled)
         case GL_CULL_FACE:
             setCullFace(enabled);
             return;
+        case GL_POLYGON_OFFSET_POINT_NV:
+            setPolygonOffsetPoint(enabled);
+            return;
+        case GL_POLYGON_OFFSET_LINE_NV:
+            setPolygonOffsetLine(enabled);
+            return;
         case GL_POLYGON_OFFSET_FILL:
             setPolygonOffsetFill(enabled);
+            return;
+        case GL_DEPTH_CLAMP_EXT:
+            setDepthClamp(enabled);
             return;
         case GL_SAMPLE_ALPHA_TO_COVERAGE:
             setSampleAlphaToCoverage(enabled);
@@ -1215,6 +1363,15 @@ void State::setEnableFeature(GLenum feature, bool enabled)
             return;
         case GL_DITHER:
             setDither(enabled);
+            return;
+        case GL_COLOR_LOGIC_OP:
+            if (mClientVersion.major == 1)
+            {
+                // Handle logicOp in GLES1 through the GLES1 state management and emulation.
+                // Otherwise this state could be set as part of ANGLE_logic_op.
+                break;
+            }
+            setLogicOpEnabled(enabled);
             return;
         case GL_PRIMITIVE_RESTART_FIXED_INDEX:
             setPrimitiveRestart(enabled);
@@ -1240,7 +1397,7 @@ void State::setEnableFeature(GLenum feature, bool enabled)
         case GL_SAMPLE_SHADING:
             setSampleShading(enabled);
             return;
-        // GL_APPLE_clip_distance/GL_EXT_clip_cull_distance
+        // GL_APPLE_clip_distance / GL_EXT_clip_cull_distance / GL_ANGLE_clip_cull_distance
         case GL_CLIP_DISTANCE0_EXT:
         case GL_CLIP_DISTANCE1_EXT:
         case GL_CLIP_DISTANCE2_EXT:
@@ -1256,6 +1413,13 @@ void State::setEnableFeature(GLenum feature, bool enabled)
                 setClipDistanceEnable(feature - GL_CLIP_DISTANCE0_EXT, enabled);
                 return;
             }
+            break;
+        case GL_SHADING_RATE_PRESERVE_ASPECT_RATIO_QCOM:
+            mShadingRatePreserveAspectRatio = enabled;
+            return;
+        case GL_FETCH_PER_SAMPLE_ARM:
+            mFetchPerSample = enabled;
+            return;
     }
 
     ASSERT(mClientVersion.major == 1);
@@ -1316,7 +1480,7 @@ void State::setEnableFeature(GLenum feature, bool enabled)
             mGLES1State.mPointSpriteEnabled = enabled;
             break;
         case GL_COLOR_LOGIC_OP:
-            mGLES1State.mLogicOpEnabled = enabled;
+            mGLES1State.setLogicOpEnabled(enabled);
             break;
         default:
             UNREACHABLE();
@@ -1345,8 +1509,14 @@ bool State::getEnableFeature(GLenum feature) const
             return isSampleAlphaToOneEnabled();
         case GL_CULL_FACE:
             return isCullFaceEnabled();
+        case GL_POLYGON_OFFSET_POINT_NV:
+            return isPolygonOffsetPointEnabled();
+        case GL_POLYGON_OFFSET_LINE_NV:
+            return isPolygonOffsetLineEnabled();
         case GL_POLYGON_OFFSET_FILL:
             return isPolygonOffsetFillEnabled();
+        case GL_DEPTH_CLAMP_EXT:
+            return isDepthClampEnabled();
         case GL_SAMPLE_ALPHA_TO_COVERAGE:
             return isSampleAlphaToCoverageEnabled();
         case GL_SAMPLE_COVERAGE:
@@ -1361,6 +1531,13 @@ bool State::getEnableFeature(GLenum feature) const
             return isBlendEnabled();
         case GL_DITHER:
             return isDitherEnabled();
+        case GL_COLOR_LOGIC_OP:
+            if (mClientVersion.major == 1)
+            {
+                // Handle logicOp in GLES1 through the GLES1 state management and emulation.
+                break;
+            }
+            return isLogicOpEnabled();
         case GL_PRIMITIVE_RESTART_FIXED_INDEX:
             return isPrimitiveRestartEnabled();
         case GL_RASTERIZER_DISCARD:
@@ -1385,7 +1562,7 @@ bool State::getEnableFeature(GLenum feature) const
             return mTextureRectangleEnabled;
         case GL_SAMPLE_SHADING:
             return isSampleShadingEnabled();
-        // GL_APPLE_clip_distance/GL_EXT_clip_cull_distance
+        // GL_APPLE_clip_distance / GL_EXT_clip_cull_distance / GL_ANGLE_clip_cull_distance
         case GL_CLIP_DISTANCE0_EXT:
         case GL_CLIP_DISTANCE1_EXT:
         case GL_CLIP_DISTANCE2_EXT:
@@ -1401,6 +1578,10 @@ bool State::getEnableFeature(GLenum feature) const
                 return mClipDistancesEnabled.test(feature - GL_CLIP_DISTANCE0_EXT);
             }
             break;
+        case GL_SHADING_RATE_PRESERVE_ASPECT_RATIO_QCOM:
+            return mShadingRatePreserveAspectRatio;
+        case GL_FETCH_PER_SAMPLE_ARM:
+            return mFetchPerSample;
     }
 
     ASSERT(mClientVersion.major == 1);
@@ -1421,9 +1602,9 @@ bool State::getEnableFeature(GLenum feature) const
         case GL_TEXTURE_COORD_ARRAY:
             return mGLES1State.mTexCoordArrayEnabled[mGLES1State.mClientActiveTexture];
         case GL_TEXTURE_2D:
-            return mGLES1State.mTexUnitEnables[mActiveSampler].test(TextureType::_2D);
+            return mGLES1State.isTextureTargetEnabled(getActiveSampler(), TextureType::_2D);
         case GL_TEXTURE_CUBE_MAP:
-            return mGLES1State.mTexUnitEnables[mActiveSampler].test(TextureType::CubeMap);
+            return mGLES1State.isTextureTargetEnabled(getActiveSampler(), TextureType::CubeMap);
         case GL_LIGHTING:
             return mGLES1State.mLightingEnabled;
         case GL_LIGHT0:
@@ -1518,6 +1699,11 @@ void State::setFragmentShaderDerivativeHint(GLenum hint)
 
 void State::setViewportParams(GLint x, GLint y, GLsizei width, GLsizei height)
 {
+    // [OpenGL ES 2.0.25] section 2.12.1 page 45:
+    // Viewport width and height are clamped to implementation-dependent maximums when specified.
+    width  = std::min(width, mCaps.maxViewportWidth);
+    height = std::min(height, mCaps.maxViewportHeight);
+
     // Skip if same viewport info
     if (mViewport.x != x || mViewport.y != y || mViewport.width != width ||
         mViewport.height != height)
@@ -1559,7 +1745,7 @@ TextureID State::getSamplerTextureId(unsigned int sampler, TextureType type) con
     return mSamplerTextures[type][sampler].id();
 }
 
-void State::detachTexture(const Context *context, const TextureMap &zeroTextures, TextureID texture)
+void State::detachTexture(Context *context, const TextureMap &zeroTextures, TextureID texture)
 {
     // Textures have a detach method on State rather than a simple
     // removeBinding, because the zero/null texture objects are managed
@@ -1671,7 +1857,7 @@ void State::setRenderbufferBinding(const Context *context, Renderbuffer *renderb
     mDirtyBits.set(DIRTY_BIT_RENDERBUFFER_BINDING);
 }
 
-void State::detachRenderbuffer(const Context *context, RenderbufferID renderbuffer)
+void State::detachRenderbuffer(Context *context, RenderbufferID renderbuffer)
 {
     // [OpenGL ES 2.0.24] section 4.4 page 109:
     // If a renderbuffer that is currently bound to RENDERBUFFER is deleted, it is as though
@@ -1789,12 +1975,20 @@ bool State::removeDrawFramebufferBinding(FramebufferID framebuffer)
 void State::setVertexArrayBinding(const Context *context, VertexArray *vertexArray)
 {
     if (mVertexArray == vertexArray)
+    {
         return;
+    }
+
     if (mVertexArray)
+    {
         mVertexArray->onBindingChanged(context, -1);
-    mVertexArray = vertexArray;
+    }
     if (vertexArray)
+    {
         vertexArray->onBindingChanged(context, 1);
+    }
+
+    mVertexArray = vertexArray;
     mDirtyBits.set(DIRTY_BIT_VERTEX_ARRAY_BINDING);
 
     if (mVertexArray && mVertexArray->hasAnyDirtyBit())
@@ -1845,9 +2039,9 @@ void State::setVertexAttribFormat(GLuint attribIndex,
     mDirtyObjects.set(DIRTY_OBJECT_VERTEX_ARRAY);
 }
 
-void State::setVertexBindingDivisor(GLuint bindingIndex, GLuint divisor)
+void State::setVertexBindingDivisor(const Context *context, GLuint bindingIndex, GLuint divisor)
 {
-    getVertexArray()->setVertexBindingDivisor(bindingIndex, divisor);
+    getVertexArray()->setVertexBindingDivisor(context, bindingIndex, divisor);
     mDirtyObjects.set(DIRTY_OBJECT_VERTEX_ARRAY);
 }
 
@@ -1881,6 +2075,7 @@ angle::Result State::setProgram(const Context *context, Program *newProgram)
         else if (mProgramPipeline.get())
         {
             mExecutable = &mProgramPipeline->getExecutable();
+            ANGLE_TRY(onProgramPipelineExecutableChange(context));
         }
 
         // Note that rendering is undefined if glUseProgram(0) is called. But ANGLE will generate
@@ -1919,17 +2114,6 @@ bool State::removeTransformFeedbackBinding(const Context *context,
     return false;
 }
 
-angle::Result State::useProgramStages(const Context *context,
-                                      ProgramPipeline *programPipeline,
-                                      GLbitfield stages,
-                                      Program *shaderProgram)
-{
-    programPipeline->useProgramStages(context, stages, shaderProgram);
-    ANGLE_TRY(onProgramPipelineExecutableChange(context, programPipeline));
-
-    return angle::Result::Continue;
-}
-
 angle::Result State::setProgramPipelineBinding(const Context *context, ProgramPipeline *pipeline)
 {
     if (mProgramPipeline.get() == pipeline)
@@ -1952,16 +2136,12 @@ angle::Result State::setProgramPipelineBinding(const Context *context, ProgramPi
         if (mProgramPipeline.get())
         {
             mExecutable = &mProgramPipeline->getExecutable();
+            ANGLE_TRY(onProgramPipelineExecutableChange(context));
         }
         else
         {
             mExecutable = nullptr;
         }
-    }
-
-    if (mProgramPipeline.get())
-    {
-        ANGLE_TRY(onProgramPipelineExecutableChange(context, mProgramPipeline.get()));
     }
 
     return angle::Result::Continue;
@@ -2088,10 +2268,6 @@ const OffsetBindingPointer<Buffer> &State::getIndexedShaderStorageBuffer(size_t 
 
 angle::Result State::detachBuffer(Context *context, const Buffer *buffer)
 {
-    if (!buffer->isBound())
-    {
-        return angle::Result::Continue;
-    }
     BufferID bufferID = buffer->id();
     for (gl::BufferBinding target : angle::AllEnums<BufferBinding>())
     {
@@ -2105,9 +2281,10 @@ angle::Result State::detachBuffer(Context *context, const Buffer *buffer)
     if (curTransformFeedback)
     {
         ANGLE_TRY(curTransformFeedback->detachBuffer(context, bufferID));
+        context->getStateCache().onActiveTransformFeedbackChange(context);
     }
 
-    if (getVertexArray()->detachBuffer(context, bufferID))
+    if (mVertexArray && mVertexArray->detachBuffer(context, bufferID))
     {
         mDirtyObjects.set(DIRTY_OBJECT_VERTEX_ARRAY);
         context->getStateCache().onVertexArrayStateChange(context);
@@ -2294,6 +2471,18 @@ void State::setPatchVertices(GLuint value)
     }
 }
 
+void State::setPixelLocalStorageActivePlanes(GLsizei n)
+{
+    mPixelLocalStorageActivePlanes = n;
+}
+
+void State::setShadingRate(GLenum rate)
+{
+    mShadingRate = FromGLenum<ShadingRate>(rate);
+    mDirtyBits.set(DIRTY_BIT_EXTENDED);
+    mExtendedDirtyBits.set(EXTENDED_DIRTY_BIT_SHADING_RATE);
+}
+
 void State::getBooleanv(GLenum pname, GLboolean *params) const
 {
     switch (pname)
@@ -2318,8 +2507,17 @@ void State::getBooleanv(GLenum pname, GLboolean *params) const
         case GL_CULL_FACE:
             *params = mRasterizer.cullFace;
             break;
+        case GL_POLYGON_OFFSET_POINT_NV:
+            *params = mRasterizer.polygonOffsetPoint;
+            break;
+        case GL_POLYGON_OFFSET_LINE_NV:
+            *params = mRasterizer.polygonOffsetLine;
+            break;
         case GL_POLYGON_OFFSET_FILL:
             *params = mRasterizer.polygonOffsetFill;
+            break;
+        case GL_DEPTH_CLAMP_EXT:
+            *params = mRasterizer.depthClamp;
             break;
         case GL_SAMPLE_ALPHA_TO_COVERAGE:
             *params = mSampleAlphaToCoverage;
@@ -2341,10 +2539,14 @@ void State::getBooleanv(GLenum pname, GLboolean *params) const
             break;
         case GL_BLEND:
             // non-indexed get returns the state of draw buffer zero
-            *params = mBlendStateExt.mEnabledMask.test(0);
+            *params = mBlendStateExt.getEnabledMask().test(0);
             break;
         case GL_DITHER:
             *params = mRasterizer.dither;
+            break;
+        case GL_COLOR_LOGIC_OP:
+            ASSERT(mClientVersion.major > 1);
+            *params = mLogicOpEnabled;
             break;
         case GL_TRANSFORM_FEEDBACK_ACTIVE:
             *params = getCurrentTransformFeedback()->isActive() ? GL_TRUE : GL_FALSE;
@@ -2397,15 +2599,32 @@ void State::getBooleanv(GLenum pname, GLboolean *params) const
         case GL_PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED:
             *params = isPrimitiveRestartEnabled() && getExtensions().tessellationShaderEXT;
             break;
-        // 2.2.2 Data Conversions For State Query Commands, in GLES 3.2 spec.
-        // If a command returning boolean data is called, such as GetBooleanv, a floating-point or
-        // integer value converts to FALSE if and only if it is zero. Otherwise it converts to TRUE.
-        // GL_EXT_clip_control
-        case GL_CLIP_ORIGIN_EXT:
-            *params = GL_TRUE;
+        case GL_ROBUST_FRAGMENT_SHADER_OUTPUT_ANGLE:
+            *params = mExtensions.robustFragmentShaderOutputANGLE ? GL_TRUE : GL_FALSE;
             break;
-        case GL_CLIP_DEPTH_MODE_EXT:
-            *params = GL_TRUE;
+        // GL_APPLE_clip_distance / GL_EXT_clip_cull_distance / GL_ANGLE_clip_cull_distance
+        case GL_CLIP_DISTANCE0_EXT:
+        case GL_CLIP_DISTANCE1_EXT:
+        case GL_CLIP_DISTANCE2_EXT:
+        case GL_CLIP_DISTANCE3_EXT:
+        case GL_CLIP_DISTANCE4_EXT:
+        case GL_CLIP_DISTANCE5_EXT:
+        case GL_CLIP_DISTANCE6_EXT:
+        case GL_CLIP_DISTANCE7_EXT:
+            if (mClientVersion.major >= 2)
+            {
+                // If GLES version is 1, the GL_CLIP_DISTANCE0_EXT enum will be used as
+                // GL_CLIP_PLANE0 instead.
+                *params = mClipDistancesEnabled.test(pname - GL_CLIP_DISTANCE0_EXT);
+            }
+            break;
+        // GL_ARM_shader_framebuffer_fetch
+        case GL_FETCH_PER_SAMPLE_ARM:
+            *params = mFetchPerSample;
+            break;
+        // GL_ARM_shader_framebuffer_fetch
+        case GL_FRAGMENT_SHADER_FRAMEBUFFER_FETCH_MRT_ARM:
+            *params = mCaps.fragmentShaderFramebufferFetchMRT;
             break;
         default:
             UNREACHABLE();
@@ -2436,6 +2655,9 @@ void State::getFloatv(GLenum pname, GLfloat *params) const
         case GL_POLYGON_OFFSET_UNITS:
             *params = mRasterizer.polygonOffsetUnits;
             break;
+        case GL_POLYGON_OFFSET_CLAMP_EXT:
+            *params = mRasterizer.polygonOffsetClamp;
+            break;
         case GL_DEPTH_RANGE:
             params[0] = mNearZ;
             params[1] = mFarZ;
@@ -2462,7 +2684,7 @@ void State::getFloatv(GLenum pname, GLfloat *params) const
             params[0] = static_cast<GLfloat>(mCoverageModulation);
             break;
         case GL_ALPHA_TEST_REF:
-            *params = mGLES1State.mAlphaTestRef;
+            *params = mGLES1State.mAlphaTestParameters.ref;
             break;
         case GL_CURRENT_COLOR:
         {
@@ -2523,14 +2745,13 @@ void State::getFloatv(GLenum pname, GLfloat *params) const
         case GL_MIN_SAMPLE_SHADING_VALUE:
             *params = mMinSampleShading;
             break;
-        // 2.2.2 Data Conversions For State Query Commands, in GLES 3.2 spec.
-        // If a command returning floating-point data is called, such as GetFloatv, ... An integer
-        // value is coerced to floating-point.
-        case GL_CLIP_ORIGIN_EXT:
-            *params = static_cast<float>(mClipControlOrigin);
+        // GL_ARM_shader_framebuffer_fetch
+        case GL_FETCH_PER_SAMPLE_ARM:
+            *params = mFetchPerSample ? 1.0f : 0.0f;
             break;
-        case GL_CLIP_DEPTH_MODE_EXT:
-            *params = static_cast<float>(mClipControlDepth);
+        // GL_ARM_shader_framebuffer_fetch
+        case GL_FRAGMENT_SHADER_FRAMEBUFFER_FETCH_MRT_ARM:
+            *params = mCaps.fragmentShaderFramebufferFetchMRT ? 1.0f : 0.0f;
             break;
         default:
             UNREACHABLE();
@@ -2543,7 +2764,7 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
     if (pname >= GL_DRAW_BUFFER0_EXT && pname <= GL_DRAW_BUFFER15_EXT)
     {
         size_t drawBuffer = (pname - GL_DRAW_BUFFER0_EXT);
-        ASSERT(drawBuffer < mMaxDrawBuffers);
+        ASSERT(drawBuffer < static_cast<size_t>(mCaps.maxDrawBuffers));
         Framebuffer *framebuffer = mDrawFramebuffer;
         // The default framebuffer may have fewer draw buffer states than a user-created one. The
         // user is always allowed to query up to GL_MAX_DRAWBUFFERS so just return GL_NONE here if
@@ -2752,6 +2973,9 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
             params[2] = mScissor.width;
             params[3] = mScissor.height;
             break;
+        case GL_POLYGON_MODE_NV:
+            *params = ToGLenum(mRasterizer.polygonMode);
+            break;
         case GL_CULL_FACE_MODE:
             *params = ToGLenum(mRasterizer.cullMode);
             break;
@@ -2821,55 +3045,55 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
         }
         break;
         case GL_TEXTURE_BINDING_2D:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params =
                 getSamplerTextureId(static_cast<unsigned int>(mActiveSampler), TextureType::_2D)
                     .value;
             break;
         case GL_TEXTURE_BINDING_RECTANGLE_ANGLE:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params = getSamplerTextureId(static_cast<unsigned int>(mActiveSampler),
                                           TextureType::Rectangle)
                           .value;
             break;
         case GL_TEXTURE_BINDING_CUBE_MAP:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params =
                 getSamplerTextureId(static_cast<unsigned int>(mActiveSampler), TextureType::CubeMap)
                     .value;
             break;
         case GL_TEXTURE_BINDING_3D:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params =
                 getSamplerTextureId(static_cast<unsigned int>(mActiveSampler), TextureType::_3D)
                     .value;
             break;
         case GL_TEXTURE_BINDING_2D_ARRAY:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params = getSamplerTextureId(static_cast<unsigned int>(mActiveSampler),
                                           TextureType::_2DArray)
                           .value;
             break;
         case GL_TEXTURE_BINDING_2D_MULTISAMPLE:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params = getSamplerTextureId(static_cast<unsigned int>(mActiveSampler),
                                           TextureType::_2DMultisample)
                           .value;
             break;
         case GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params = getSamplerTextureId(static_cast<unsigned int>(mActiveSampler),
                                           TextureType::_2DMultisampleArray)
                           .value;
             break;
         case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params = getSamplerTextureId(static_cast<unsigned int>(mActiveSampler),
                                           TextureType::CubeMapArray)
                           .value;
             break;
         case GL_TEXTURE_BINDING_EXTERNAL_OES:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params = getSamplerTextureId(static_cast<unsigned int>(mActiveSampler),
                                           TextureType::External)
                           .value;
@@ -2877,7 +3101,7 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
 
         // GL_OES_texture_buffer
         case GL_TEXTURE_BINDING_BUFFER:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params =
                 getSamplerTextureId(static_cast<unsigned int>(mActiveSampler), TextureType::Buffer)
                     .value;
@@ -2912,7 +3136,7 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
             *params = mReadFramebuffer->getReadBufferState();
             break;
         case GL_SAMPLER_BINDING:
-            ASSERT(mActiveSampler < mMaxCombinedTextureImageUnits);
+            ASSERT(mActiveSampler < mCaps.maxCombinedTextureImageUnits);
             *params = getSamplerId(static_cast<GLuint>(mActiveSampler)).value;
             break;
         case GL_DEBUG_LOGGED_MESSAGES:
@@ -2943,7 +3167,7 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
             *params = mBoundBuffers[BufferBinding::DispatchIndirect].id().value;
             break;
         case GL_ALPHA_TEST_FUNC:
-            *params = ToGLenum(mGLES1State.mAlphaTestFunc);
+            *params = ToGLenum(mGLES1State.mAlphaTestParameters.func);
             break;
         case GL_CLIENT_ACTIVE_TEXTURE:
             *params = mGLES1State.mClientActiveTexture + GL_TEXTURE0;
@@ -2977,7 +3201,7 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
             break;
 
         // GL_ANGLE_provoking_vertex
-        case GL_PROVOKING_VERTEX:
+        case GL_PROVOKING_VERTEX_ANGLE:
             *params = ToGLenum(mProvokingVertex);
             break;
 
@@ -3000,11 +3224,32 @@ angle::Result State::getIntegerv(const Context *context, GLenum pname, GLint *pa
 
         // GL_EXT_clip_control
         case GL_CLIP_ORIGIN_EXT:
-            *params = mClipControlOrigin;
+            *params = ToGLenum(mClipOrigin);
             break;
         case GL_CLIP_DEPTH_MODE_EXT:
-            *params = mClipControlDepth;
+            *params = ToGLenum(mClipDepthMode);
             break;
+
+        // GL_QCOM_shading_rate
+        case GL_SHADING_RATE_QCOM:
+            *params = ToGLenum(mShadingRate);
+            break;
+
+        // GL_ANGLE_shader_pixel_local_storage
+        case GL_PIXEL_LOCAL_STORAGE_ACTIVE_PLANES_ANGLE:
+            *params = mPixelLocalStorageActivePlanes;
+            break;
+
+        // GL_ARM_shader_framebuffer_fetch
+        case GL_FETCH_PER_SAMPLE_ARM:
+            *params = mFetchPerSample ? 1 : 0;
+            break;
+
+        // GL_ARM_shader_framebuffer_fetch
+        case GL_FRAGMENT_SHADER_FRAMEBUFFER_FETCH_MRT_ARM:
+            *params = mCaps.fragmentShaderFramebufferFetchMRT ? 1 : 0;
+            break;
+
         default:
             UNREACHABLE();
             break;
@@ -3038,32 +3283,32 @@ void State::getPointerv(const Context *context, GLenum pname, void **params) con
     }
 }
 
-void State::getIntegeri_v(GLenum target, GLuint index, GLint *data) const
+void State::getIntegeri_v(const Context *context, GLenum target, GLuint index, GLint *data) const
 {
     switch (target)
     {
         case GL_BLEND_SRC_RGB:
-            ASSERT(static_cast<size_t>(index) < mBlendStateExt.mMaxDrawBuffers);
+            ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
             *data = mBlendStateExt.getSrcColorIndexed(index);
             break;
         case GL_BLEND_SRC_ALPHA:
-            ASSERT(static_cast<size_t>(index) < mBlendStateExt.mMaxDrawBuffers);
+            ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
             *data = mBlendStateExt.getSrcAlphaIndexed(index);
             break;
         case GL_BLEND_DST_RGB:
-            ASSERT(static_cast<size_t>(index) < mBlendStateExt.mMaxDrawBuffers);
+            ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
             *data = mBlendStateExt.getDstColorIndexed(index);
             break;
         case GL_BLEND_DST_ALPHA:
-            ASSERT(static_cast<size_t>(index) < mBlendStateExt.mMaxDrawBuffers);
+            ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
             *data = mBlendStateExt.getDstAlphaIndexed(index);
             break;
         case GL_BLEND_EQUATION_RGB:
-            ASSERT(static_cast<size_t>(index) < mBlendStateExt.mMaxDrawBuffers);
+            ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
             *data = mBlendStateExt.getEquationColorIndexed(index);
             break;
         case GL_BLEND_EQUATION_ALPHA:
-            ASSERT(static_cast<size_t>(index) < mBlendStateExt.mMaxDrawBuffers);
+            ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
             *data = mBlendStateExt.getEquationAlphaIndexed(index);
             break;
         case GL_TRANSFORM_FEEDBACK_BUFFER_BINDING:
@@ -3176,7 +3421,7 @@ void State::getBooleani_v(GLenum target, GLuint index, GLboolean *data) const
     {
         case GL_COLOR_WRITEMASK:
         {
-            ASSERT(static_cast<size_t>(index) < mBlendStateExt.mMaxDrawBuffers);
+            ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
             bool r, g, b, a;
             mBlendStateExt.getColorMaskIndexed(index, &r, &g, &b, &a);
             data[0] = r;
@@ -3195,8 +3440,8 @@ void State::getBooleani_v(GLenum target, GLuint index, GLboolean *data) const
     }
 }
 
-// TODO(https://anglebug.com/3889): Remove this helper function after blink and chromium part
-// refactory done.
+// TODO(http://anglebug.com/3889): Remove this helper function after blink and chromium part
+// refactor done.
 Texture *State::getTextureForActiveSampler(TextureType type, size_t index)
 {
     if (type != TextureType::VideoImage)
@@ -3263,7 +3508,7 @@ angle::Result State::syncTexturesInit(const Context *context, Command command)
 angle::Result State::syncImagesInit(const Context *context, Command command)
 {
     ASSERT(mRobustResourceInit);
-    ASSERT(mProgram);
+    ASSERT(mExecutable);
     for (size_t imageUnitIndex : mExecutable->getActiveImagesMask())
     {
         Texture *texture = mImageUnits[imageUnitIndex].texture.get();
@@ -3371,6 +3616,16 @@ angle::Result State::syncProgram(const Context *context, Command command)
     if (mProgram)
     {
         return mProgram->syncState(context);
+    }
+    return angle::Result::Continue;
+}
+
+angle::Result State::syncProgramPipelineObject(const Context *context, Command command)
+{
+    // If a ProgramPipeline is bound, ensure it is linked.
+    if (mProgramPipeline.get())
+    {
+        mProgramPipeline->resolveLink(context);
     }
     return angle::Result::Continue;
 }
@@ -3490,15 +3745,20 @@ angle::Result State::onProgramExecutableChange(const Context *context, Program *
     return angle::Result::Continue;
 }
 
-angle::Result State::onProgramPipelineExecutableChange(const Context *context,
-                                                       ProgramPipeline *programPipeline)
+angle::Result State::onProgramPipelineExecutableChange(const Context *context)
 {
     mDirtyBits.set(DIRTY_BIT_PROGRAM_EXECUTABLE);
 
+    if (!mProgramPipeline->isLinked())
+    {
+        mDirtyObjects.set(DIRTY_OBJECT_PROGRAM_PIPELINE_OBJECT);
+    }
+
     // Set any bound textures.
-    const ActiveTextureTypeArray &textureTypes =
-        programPipeline->getExecutable().getActiveSamplerTypes();
-    for (size_t textureIndex : programPipeline->getExecutable().getActiveSamplersMask())
+    const ProgramExecutable &executable        = mProgramPipeline->getExecutable();
+    const ActiveTextureTypeArray &textureTypes = executable.getActiveSamplerTypes();
+
+    for (size_t textureIndex : executable.getActiveSamplersMask())
     {
         TextureType type = textureTypes[textureIndex];
 
@@ -3510,7 +3770,7 @@ angle::Result State::onProgramPipelineExecutableChange(const Context *context,
         updateTextureBinding(context, textureIndex, texture);
     }
 
-    for (size_t imageUnitIndex : programPipeline->getExecutable().getActiveImagesMask())
+    for (size_t imageUnitIndex : executable.getActiveImagesMask())
     {
         Texture *image = mImageUnits[imageUnitIndex].texture.get();
         if (!image)
@@ -3581,7 +3841,7 @@ void State::onActiveTextureChange(const Context *context, size_t textureUnit)
                                      : nullptr;
         updateTextureBinding(context, textureUnit, activeTexture);
 
-        mExecutable->onStateChange(angle::SubjectMessage::SubjectChanged);
+        mExecutable->onStateChange(angle::SubjectMessage::ProgramTextureOrImageBindingChanged);
     }
 }
 
@@ -3618,7 +3878,7 @@ void State::onImageStateChange(const Context *context, size_t unit)
             mDirtyObjects.set(DIRTY_OBJECT_IMAGES_INIT);
         }
 
-        mExecutable->onStateChange(angle::SubjectMessage::SubjectChanged);
+        mExecutable->onStateChange(angle::SubjectMessage::ProgramTextureOrImageBindingChanged);
     }
 }
 
@@ -3628,6 +3888,16 @@ void State::onUniformBufferStateChange(size_t uniformBufferIndex)
     mDirtyBits.set(DIRTY_BIT_UNIFORM_BUFFER_BINDINGS);
 }
 
+void State::onAtomicCounterBufferStateChange(size_t atomicCounterBufferIndex)
+{
+    mDirtyBits.set(DIRTY_BIT_ATOMIC_COUNTER_BUFFER_BINDING);
+}
+
+void State::onShaderStorageBufferStateChange(size_t shaderStorageBufferIndex)
+{
+    mDirtyBits.set(DIRTY_BIT_SHADER_STORAGE_BUFFER_BINDING);
+}
+
 AttributesMask State::getAndResetDirtyCurrentValues() const
 {
     AttributesMask retVal = mDirtyCurrentValues;
@@ -3635,11 +3905,35 @@ AttributesMask State::getAndResetDirtyCurrentValues() const
     return retVal;
 }
 
-State::ExtendedDirtyBits State::getAndResetExtendedDirtyBits() const
+void State::initializeForCapture(const Context *context)
 {
-    ExtendedDirtyBits retVal = mExtendedDirtyBits;
-    mExtendedDirtyBits.reset();
-    return retVal;
+    mCaps       = context->getCaps();
+    mExtensions = context->getExtensions();
+
+    // This little kludge gets around the frame capture "constness". It should be safe because
+    // nothing in the context is modified in a non-compatible way during capture.
+    Context *mutableContext = const_cast<Context *>(context);
+    initialize(mutableContext);
+}
+
+void State::setLogicOpEnabled(bool enabled)
+{
+    if (mLogicOpEnabled != enabled)
+    {
+        mLogicOpEnabled = enabled;
+        mDirtyBits.set(DIRTY_BIT_EXTENDED);
+        mExtendedDirtyBits.set(EXTENDED_DIRTY_BIT_LOGIC_OP_ENABLED);
+    }
+}
+
+void State::setLogicOp(LogicalOperation opcode)
+{
+    if (mLogicOp != opcode)
+    {
+        mLogicOp = opcode;
+        mDirtyBits.set(DIRTY_BIT_EXTENDED);
+        mExtendedDirtyBits.set(EXTENDED_DIRTY_BIT_LOGIC_OP);
+    }
 }
 
 constexpr State::DirtyObjectHandler State::kDirtyObjectHandlers[DIRTY_OBJECT_MAX];

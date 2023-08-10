@@ -28,6 +28,7 @@ class BitSetTest : public testing::Test
 using BitSetTypes = ::testing::Types<BitSet<12>, BitSet32<12>, BitSet64<12>>;
 TYPED_TEST_SUITE(BitSetTest, BitSetTypes);
 
+// Basic test of various bitset functionalities
 TYPED_TEST(BitSetTest, Basic)
 {
     EXPECT_EQ(TypeParam::Zero().bits(), 0u);
@@ -98,23 +99,36 @@ TYPED_TEST(BitSetTest, Basic)
     EXPECT_FALSE(mBits.any());
     EXPECT_TRUE(mBits.none());
     EXPECT_EQ(mBits.count(), 0u);
-
-    // Test that out-of-bound sets don't modify the bitset
-    constexpr uint32_t kMask = (1 << 12) - 1;
-
-    EXPECT_EQ(mBits.set(12).bits() & ~kMask, 0u);
-    EXPECT_EQ(mBits.set(13).bits() & ~kMask, 0u);
-    EXPECT_EQ(mBits.flip(12).bits() & ~kMask, 0u);
-    EXPECT_EQ(mBits.flip(13).bits() & ~kMask, 0u);
 }
 
+// Test that BitSetT's initializer list constructor works correctly.
+TYPED_TEST(BitSetTest, InitializerList)
+{
+    TypeParam bits = TypeParam{
+        2, 5, 6, 9, 10,
+    };
+
+    for (size_t i = 0; i < bits.size(); ++i)
+    {
+        if (i == 2 || i == 5 || i == 6 || i == 9 || i == 10)
+        {
+            EXPECT_TRUE(bits[i]) << i;
+        }
+        else
+        {
+            EXPECT_FALSE(bits[i]) << i;
+        }
+    }
+}
+
+// Test bitwise operations
 TYPED_TEST(BitSetTest, BitwiseOperators)
 {
     TypeParam mBits = this->mBits;
-    // Use a value that has a 1 in the 12th and 13th bits, to make sure masking to exactly 12 bits
-    // does not have an off-by-one error.
-    constexpr uint32_t kSelfValue  = 0xF9E4;
-    constexpr uint32_t kOtherValue = 0x5C6A;
+    // Use a value that has a 1 in the 12th bit, to make sure masking to exactly 12 bits does not
+    // have an off-by-one error.
+    constexpr uint32_t kSelfValue  = 0x9E4;
+    constexpr uint32_t kOtherValue = 0xC6A;
 
     constexpr uint32_t kMask             = (1 << 12) - 1;
     constexpr uint32_t kSelfMaskedValue  = kSelfValue & kMask;
@@ -168,6 +182,65 @@ TYPED_TEST(BitSetTest, BitwiseOperators)
     EXPECT_EQ(mBits.bits() & ~kMask, 0u);
     mBits ^= kOtherMaskedValue;
     EXPECT_EQ(mBits.bits() & ~kMask, 0u);
+}
+
+// Test BitSetT::Mask
+TYPED_TEST(BitSetTest, Mask)
+{
+    // Test constexpr usage
+    TypeParam bits = TypeParam::Mask(0);
+    EXPECT_EQ(bits.bits(), 0u);
+
+    bits = TypeParam::Mask(1);
+    EXPECT_EQ(bits.bits(), 1u);
+
+    bits = TypeParam::Mask(2);
+    EXPECT_EQ(bits.bits(), 3u);
+
+    bits = TypeParam::Mask(TypeParam::size());
+    EXPECT_EQ(bits.bits(), (1u << TypeParam::size()) - 1);
+
+    // Complete test
+    for (size_t i = 0; i < TypeParam::size(); ++i)
+    {
+        bits = TypeParam::Mask(i);
+        EXPECT_EQ(bits.bits(), (1u << i) - 1);
+    }
+}
+
+// Tests removing bits from the iterator during iteration.
+TYPED_TEST(BitSetTest, ResetLaterBits)
+{
+    TypeParam bits;
+    std::set<size_t> expectedValues;
+    for (size_t i = 1; i < TypeParam::size(); i += 2)
+    {
+        expectedValues.insert(i);
+    }
+
+    for (size_t i = 1; i < TypeParam::size(); ++i)
+        bits.set(i);
+
+    // Remove the even bits
+    TypeParam resetBits;
+    for (size_t i = 2; i < TypeParam::size(); i += 2)
+    {
+        resetBits.set(i);
+    }
+
+    std::set<size_t> actualValues;
+
+    for (auto iter = bits.begin(), end = bits.end(); iter != end; ++iter)
+    {
+        if (*iter == 1)
+        {
+            iter.resetLaterBits(resetBits);
+        }
+
+        actualValues.insert(*iter);
+    }
+
+    EXPECT_EQ(expectedValues, actualValues);
 }
 
 template <typename T>
@@ -326,7 +399,7 @@ TYPED_TEST(BitSetIteratorTest, SetLaterBit)
     EXPECT_EQ(expectedValues, actualValues);
 }
 
-// Tests removing bits from the iterator during iteration.
+// Tests removing bit from the iterator during iteration.
 TYPED_TEST(BitSetIteratorTest, ResetLaterBit)
 {
     TypeParam mStateBits            = this->mStateBits;
@@ -395,6 +468,7 @@ using BitSetArrayTypes =
     ::testing::Types<BitSetArray<65>, BitSetArray<128>, BitSetArray<130>, BitSetArray<511>>;
 TYPED_TEST_SUITE(BitSetArrayTest, BitSetArrayTypes);
 
+// Basic test of various BitSetArray functionalities
 TYPED_TEST(BitSetArrayTest, BasicTest)
 {
     TypeParam &mBits = this->mBitSet;
@@ -403,6 +477,7 @@ TYPED_TEST(BitSetArrayTest, BasicTest)
     EXPECT_FALSE(mBits.any());
     EXPECT_TRUE(mBits.none());
     EXPECT_EQ(mBits.count(), 0u);
+    EXPECT_EQ(mBits.bits(0), 0u);
 
     // Verify set on a single bit
     mBits.set(45);
@@ -410,6 +485,10 @@ TYPED_TEST(BitSetArrayTest, BasicTest)
     {
         EXPECT_EQ(bit, 45u);
     }
+
+    EXPECT_EQ(mBits.first(), 45u);
+    EXPECT_EQ(mBits.last(), 45u);
+
     mBits.reset(45);
 
     // Set every bit to 1.
@@ -452,8 +531,11 @@ TYPED_TEST(BitSetArrayTest, BasicTest)
     // Test intersection logic
     TypeParam testBitSet;
     testBitSet.set(1);
+    EXPECT_EQ(testBitSet.bits(0), (1ul << 1ul));
     testBitSet.set(3);
+    EXPECT_EQ(testBitSet.bits(0), (1ul << 1ul) | (1ul << 3ul));
     testBitSet.set(5);
+    EXPECT_EQ(testBitSet.bits(0), (1ul << 1ul) | (1ul << 3ul) | (1ul << 5ul));
     EXPECT_FALSE(mBits.intersects(testBitSet));
     mBits.set(3);
     EXPECT_TRUE(mBits.intersects(testBitSet));
@@ -517,6 +599,12 @@ TYPED_TEST(BitSetArrayTest, BasicTest)
         testBitSet2.set(bit);
     }
 
+    EXPECT_EQ(testBitSet1.first(), 0u);
+    EXPECT_EQ(testBitSet1.last(), 60u);
+
+    EXPECT_EQ(testBitSet2.first(), 5u);
+    EXPECT_EQ(testBitSet2.last(), 63u);
+
     actualValues.clear();
     for (auto bit : (testBitSet1 & testBitSet2))
     {
@@ -560,5 +648,149 @@ TYPED_TEST(BitSetArrayTest, BasicTest)
     {
         EXPECT_TRUE(testBitSet.test(bit));
     }
+}
+
+// Test that BitSetArray's initializer list constructor works correctly.
+TEST(BitSetArrayTest, InitializerList)
+{
+    BitSetArray<500> bits = BitSetArray<500>{
+        0,   11,  22,  33,  44,  55,  66,  77,  88,  99,  110, 121, 132, 143, 154, 165,
+        176, 187, 198, 209, 220, 231, 242, 253, 264, 275, 286, 297, 308, 319, 330, 341,
+        352, 363, 374, 385, 396, 407, 418, 429, 440, 451, 462, 473, 484, 495,
+    };
+
+    for (size_t i = 0; i < bits.size(); ++i)
+    {
+        if (i % 11 == 0)
+        {
+            EXPECT_TRUE(bits[i]) << i;
+        }
+        else
+        {
+            EXPECT_FALSE(bits[i]) << i;
+        }
+    }
+}
+
+// Test that BitSetArray's constructor with uint64_t.
+TYPED_TEST(BitSetArrayTest, ConstructorWithUInt64)
+{
+    uint64_t value = 0x5555555555555555;
+    TypeParam testBitSet(value);
+    for (size_t i = 0; i < testBitSet.size(); ++i)
+    {
+        if (i < sizeof(uint64_t) * 8 && (value & (0x1ull << i)))
+        {
+            EXPECT_TRUE(testBitSet.test(i));
+        }
+        else
+        {
+            EXPECT_FALSE(testBitSet.test(i));
+        }
+    }
+}
+
+// Test iteration over BitSetArray where there are gaps
+TYPED_TEST(BitSetArrayTest, IterationWithGaps)
+{
+    TypeParam &mBits = this->mBitSet;
+
+    // Test iterator works with gap in bitset.
+    std::set<size_t> bitsToBeSet = {0, mBits.size() / 2, mBits.size() - 1};
+    for (size_t bit : bitsToBeSet)
+    {
+        mBits.set(bit);
+    }
+    std::set<size_t> bitsActuallySet = {};
+    for (size_t bit : mBits)
+    {
+        bitsActuallySet.insert(bit);
+    }
+    EXPECT_EQ(bitsToBeSet, bitsActuallySet);
+    EXPECT_EQ(mBits.count(), bitsToBeSet.size());
+    mBits.reset();
+}
+
+// Test BitSetArray::Mask
+TYPED_TEST(BitSetArrayTest, Mask)
+{
+    // Test constexpr usage
+    TypeParam bits = TypeParam::Mask(0);
+    for (size_t i = 0; i < bits.size(); ++i)
+    {
+        EXPECT_FALSE(bits[i]) << i;
+    }
+
+    bits = TypeParam::Mask(1);
+    for (size_t i = 0; i < bits.size(); ++i)
+    {
+        if (i < 1)
+        {
+            EXPECT_TRUE(bits[i]) << i;
+        }
+        else
+        {
+            EXPECT_FALSE(bits[i]) << i;
+        }
+    }
+
+    bits = TypeParam::Mask(2);
+    for (size_t i = 0; i < bits.size(); ++i)
+    {
+        if (i < 2)
+        {
+            EXPECT_TRUE(bits[i]) << i;
+        }
+        else
+        {
+            EXPECT_FALSE(bits[i]) << i;
+        }
+    }
+
+    bits = TypeParam::Mask(TypeParam::size());
+    for (size_t i = 0; i < bits.size(); ++i)
+    {
+        EXPECT_TRUE(bits[i]) << i;
+    }
+
+    // Complete test
+    for (size_t i = 0; i < TypeParam::size(); ++i)
+    {
+        bits = TypeParam::Mask(i);
+        for (size_t j = 0; j < bits.size(); ++j)
+        {
+            if (j < i)
+            {
+                EXPECT_TRUE(bits[j]) << j;
+            }
+            else
+            {
+                EXPECT_FALSE(bits[j]) << j;
+            }
+        }
+    }
+}
+
+// Unit test for angle::Bit
+TEST(Bit, Test)
+{
+    EXPECT_EQ(Bit<uint32_t>(0), 1u);
+    EXPECT_EQ(Bit<uint32_t>(1), 2u);
+    EXPECT_EQ(Bit<uint32_t>(2), 4u);
+    EXPECT_EQ(Bit<uint32_t>(3), 8u);
+    EXPECT_EQ(Bit<uint32_t>(31), 0x8000'0000u);
+    EXPECT_EQ(Bit<uint64_t>(63), static_cast<uint64_t>(0x8000'0000'0000'0000llu));
+}
+
+// Unit test for angle::BitMask
+TEST(BitMask, Test)
+{
+    EXPECT_EQ(BitMask<uint32_t>(1), 1u);
+    EXPECT_EQ(BitMask<uint32_t>(2), 3u);
+    EXPECT_EQ(BitMask<uint32_t>(3), 7u);
+    EXPECT_EQ(BitMask<uint32_t>(31), 0x7FFF'FFFFu);
+    EXPECT_EQ(BitMask<uint32_t>(32), 0xFFFF'FFFFu);
+    EXPECT_EQ(BitMask<uint64_t>(63), static_cast<uint64_t>(0x7FFF'FFFF'FFFF'FFFFllu));
+    EXPECT_EQ(BitMask<uint64_t>(64), static_cast<uint64_t>(0xFFFF'FFFF'FFFF'FFFFllu));
 }
 }  // anonymous namespace

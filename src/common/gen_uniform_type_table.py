@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # Copyright 2017 The ANGLE Project Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -7,6 +7,7 @@
 #  Code generation for OpenGL uniform type info tables.
 #  NOTE: don't run this script directly. Run scripts/run_code_generation.py.
 
+import os
 import sys
 
 all_uniform_types = [
@@ -255,9 +256,9 @@ def main():
         outputs = ['uniform_type_info_autogen.cpp']
 
         if sys.argv[1] == 'inputs':
-            print ','.join(inputs)
+            print(','.join(inputs))
         elif sys.argv[1] == 'outputs':
-            print ','.join(outputs)
+            print(','.join(outputs))
         else:
             print('Invalid script parameters')
             return 1
@@ -272,7 +273,7 @@ def main():
 
     with open('uniform_type_info_autogen.cpp', 'wt') as out_file:
         output_cpp = template_cpp.format(
-            script_name=sys.argv[0],
+            script_name=os.path.basename(sys.argv[0]),
             total_count=len(all_uniform_types),
             uniform_type_info_data=uniform_type_info_data,
             uniform_type_index_cases=uniform_type_index_cases)

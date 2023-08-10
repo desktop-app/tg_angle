@@ -96,7 +96,7 @@ static bool is_extension_enabled_or_is_core(TParseContext *context,
 // which means in version V1, the symbol is reserved, and remains reserved until V3.  From versions
 // V2 until V3, it's a keyword if the extension is enabled.  From version V3 on, it's a keyword in
 // the spec itself.  Prior to V1, the symbol can be used as identifier.
-static int ES2_extension_2_ES3_keyword(TParseContext *context, TExtension extension1, TExtension extension2, int token);
+static int ES2_extensions_ES3_keyword(TParseContext *context, TExtension extension1, TExtension extension2, TExtension extension3, int token);
 static int ES2_reserved_ES3_keyword(TParseContext *context, int token);
 static int ES2_keyword_ES3_reserved(TParseContext *context, int token);
 static int ES3_keyword(TParseContext *context, int token);
@@ -247,7 +247,7 @@ O           [0-7]
 "samplerVideoWEBGL"    { return WEBGL_video_texture_extension(context, SAMPLERVIDEOWEBGL); }
 "struct"       { return STRUCT; }
 
-"layout"  { return ES2_extension_2_ES3_keyword(context, TExtension::EXT_shader_framebuffer_fetch, TExtension::EXT_shader_framebuffer_fetch_non_coherent, LAYOUT); }
+"layout"  { return ES2_extensions_ES3_keyword(context, TExtension::EXT_shader_framebuffer_fetch, TExtension::EXT_shader_framebuffer_fetch_non_coherent, TExtension::KHR_blend_equation_advanced, LAYOUT); }
 
 "yuvCscStandardEXT"    { return ES3_extension(context, TExtension::EXT_YUV_target, YUVCSCSTANDARDEXT); }
 "itu_601"              { return yuvcscstandardext_constant(context); }
@@ -281,6 +281,11 @@ O           [0-7]
 "sample" { return ES3_reserved_ES3_extension_ES3_2_keyword(context, TExtension::OES_shader_multisample_interpolation, SAMPLE); }
 "precise" { return ES3_1_reserved_ES3_1_extension_ES3_2_keyword(context, TExtension::EXT_gpu_shader5, PRECISE); }
 
+    /* ANGLE_shader_pixel_local_storage */
+"pixelLocalANGLE" { return ES3_extension(context, TExtension::ANGLE_shader_pixel_local_storage, PIXELLOCALANGLE); }
+"ipixelLocalANGLE" { return ES3_extension(context, TExtension::ANGLE_shader_pixel_local_storage, IPIXELLOCALANGLE); }
+"upixelLocalANGLE" { return ES3_extension(context, TExtension::ANGLE_shader_pixel_local_storage, UPIXELLOCALANGLE); }
+
     /* Reserved keywords for GLSL ES 3.00 that are not reserved for GLSL ES 1.00 */
 "resource"          |
 "subroutine"        |
@@ -295,10 +300,6 @@ O           [0-7]
 "image1DArray"      |
 "iimage1DArray"     |
 "uimage1DArray"     |
-"image1DShadow"     |
-"image2DShadow"     |
-"image1DArrayShadow" |
-"image2DArrayShadow" |
 
 "sampler1DArray"    |
 "sampler1DArrayShadow" |
@@ -318,6 +319,20 @@ O           [0-7]
     /* Reserved keywords in GLSL ES 1.00 that are not reserved in GLSL ES 3.00 */
 "packed"  {
     if (context->getShaderVersion() >= 300)
+    {
+        yylval->lex.string = AllocatePoolCharArray(yytext, yyleng);
+        return check_type(yyscanner);
+    }
+
+    return reserved_word(yyscanner);
+}
+
+   /* Reserved keywords in WebGL that not reserved in GL */
+"image1DShadow"      |
+"image2DShadow"      |
+"image1DArrayShadow" |
+"image2DArrayShadow" {
+    if(!IsWebGLBasedSpec(context->getShaderSpec()))
     {
         yylval->lex.string = AllocatePoolCharArray(yytext, yyleng);
         return check_type(yyscanner);
@@ -612,7 +627,7 @@ int WEBGL_video_texture_extension(TParseContext *context, int token)
     return check_type(yyscanner);
 }
 
-int ES2_extension_2_ES3_keyword(TParseContext *context, TExtension extension1, TExtension extension2, int token)
+int ES2_extensions_ES3_keyword(TParseContext *context, TExtension extension1, TExtension extension2, TExtension extension3, int token)
 {
     struct yyguts_t* yyg = (struct yyguts_t*) context->getScanner();
     yyscan_t yyscanner = (yyscan_t) context->getScanner();
@@ -623,6 +638,10 @@ int ES2_extension_2_ES3_keyword(TParseContext *context, TExtension extension1, T
         return token;
     }
     else if (is_extension_enabled_or_is_core(context, 100, extension2, 300))
+    {
+        return token;
+    }
+    else if (is_extension_enabled_or_is_core(context, 100, extension3, 300))
     {
         return token;
     }
@@ -920,17 +939,6 @@ int glslang_scan(size_t count, const char* const string[], const int length[],
     if (!preprocessor->init(count, string, length))
         return 1;
 
-    // Define extension macros.
-    const TExtensionBehavior& extBehavior = context->extensionBehavior();
-    for (TExtensionBehavior::const_iterator iter = extBehavior.begin();
-         iter != extBehavior.end(); ++iter) {
-        // OVR_multiview should not be defined for WebGL spec'ed shaders.
-        if (sh::IsWebGLBasedSpec(context->getShaderSpec()) &&
-            iter->first == TExtension::OVR_multiview) {
-            continue;
-        }
-        preprocessor->predefineMacro(GetExtensionNameString(iter->first), 1);
-    }
     if (context->getFragmentPrecisionHigh())
         preprocessor->predefineMacro("GL_FRAGMENT_PRECISION_HIGH", 1);
 

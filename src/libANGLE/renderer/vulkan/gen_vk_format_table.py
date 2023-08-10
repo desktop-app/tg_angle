@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # Copyright 2016 The ANGLE Project Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -29,8 +29,6 @@ template_table_autogen_cpp = """// GENERATED FILE - DO NOT EDIT.
 
 #include "libANGLE/renderer/vulkan/vk_format_utils.h"
 
-#include "image_util/copyimage.h"
-#include "image_util/generatemip.h"
 #include "image_util/loadimage.h"
 
 using namespace angle;
@@ -67,6 +65,7 @@ angle::FormatID GetFormatIDFromVkFormat(VkFormat vkFormat)
     {{
 {vk_format_cases}
         default:
+            UNREACHABLE();
             return angle::FormatID::NONE;
     }}
 }}
@@ -80,14 +79,14 @@ break;
 """
 
 format_entry_template = """case angle::FormatID::{format_id}:
-intendedGLFormat = {internal_format};
+mIntendedGLFormat = {internal_format};
 {image_template}
 {buffer_template}
 break;
 """
 
-image_basic_template = """actualImageFormatID = {image};
-imageInitializerFunction = {image_initializer};"""
+image_basic_template = """mActualSampleOnlyImageFormatID = {image};
+mImageInitializerFunction = {image_initializer};"""
 
 image_struct_template = "{{{image}, {image_initializer}}}"
 
@@ -96,10 +95,10 @@ static constexpr ImageFormatInitInfo kInfo[] = {{{image_list}}};
 initImageFallback(renderer, kInfo, ArraySize(kInfo));
 }}"""
 
-buffer_basic_template = """actualBufferFormatID = {buffer};
-vkBufferFormatIsPacked = {vk_buffer_format_is_packed};
-vertexLoadFunction = {vertex_load_function};
-vertexLoadRequiresConversion = {vertex_load_converts};"""
+buffer_basic_template = """mActualBufferFormatID = {buffer};
+mVkBufferFormatIsPacked = {vk_buffer_format_is_packed};
+mVertexLoadFunction = {vertex_load_function};
+mVertexLoadRequiresConversion = {vertex_load_converts};"""
 
 buffer_struct_template = """{{{buffer}, {vk_buffer_format_is_packed}, 
 {vertex_load_function}, {vertex_load_converts}}}"""
@@ -122,7 +121,7 @@ def verify_vk_map_keys(angle_to_gl, vk_json_data):
     for table in ["map", "fallbacks"]:
         for angle_format in vk_json_data[table].keys():
             if not angle_format in angle_to_gl.keys():
-                print "Invalid format " + angle_format + " in vk_format_map.json in " + table
+                print("Invalid format " + angle_format + " in vk_format_map.json in " + table)
                 no_error = False
 
     return no_error
@@ -147,7 +146,9 @@ def get_vertex_copy_function(src_format, dst_format, vk_format):
         is_signed = 'false' if 'UINT' in src_format or 'UNORM' in src_format or 'USCALED' in src_format else 'true'
         normalized = 'true' if 'NORM' in src_format else 'false'
         to_float = 'false' if 'INT' in src_format else 'true'
-        return 'CopyXYZ10W2ToXYZW32FVertexData<%s, %s, %s>' % (is_signed, normalized, to_float)
+        to_half = to_float
+        return 'CopyXYZ10W2ToXYZWFloatVertexData<%s, %s, %s, %s>' % (is_signed, normalized,
+                                                                     to_float, to_half)
     return angle_format.get_vertex_copy_function(src_format, dst_format)
 
 
@@ -240,9 +241,9 @@ def main():
         outputs = [out_file_name]
 
         if sys.argv[1] == 'inputs':
-            print ','.join(inputs)
+            print(','.join(inputs))
         elif sys.argv[1] == 'outputs':
-            print ','.join(outputs)
+            print(','.join(outputs))
         else:
             print('Invalid script parameters')
             return 1
@@ -256,23 +257,23 @@ def main():
 
     format_id_cases = [
         get_format_id_case(format_id, vk_format)
-        for format_id, vk_format in vk_json_data["map"].iteritems()
+        for format_id, vk_format in sorted(vk_json_data["map"].items())
     ]
 
     vk_format_cases = [
         get_vk_format_case(format_id, vk_format)
-        for format_id, vk_format in vk_json_data["map"].iteritems()
+        for format_id, vk_format in sorted(vk_json_data["map"].items())
     ]
 
     vk_cases = [
-        gen_format_case(angle, gl, vk_json_data) for angle, gl in sorted(angle_to_gl.iteritems())
+        gen_format_case(angle, gl, vk_json_data) for angle, gl in sorted(angle_to_gl.items())
     ]
 
     output_cpp = template_table_autogen_cpp.format(
         format_case_data="\n".join(vk_cases),
         format_id_cases=",\n".join(format_id_cases),
         vk_format_cases="".join(vk_format_cases),
-        script_name=__file__,
+        script_name=os.path.basename(__file__),
         out_file_name=out_file_name,
         input_file_name=input_file_name)
 

@@ -810,7 +810,12 @@ void INTERNAL_GL_APIENTRY glFlushMappedNamedBufferRangeNULL(GLuint buffer,
                                                             GLsizeiptr length)
 {}
 
+void INTERNAL_GL_APIENTRY glFramebufferFetchBarrierEXTNULL() {}
+
 void INTERNAL_GL_APIENTRY glFramebufferParameteriNULL(GLenum target, GLenum pname, GLint param) {}
+
+void INTERNAL_GL_APIENTRY glFramebufferParameteriMESANULL(GLenum target, GLenum pname, GLint param)
+{}
 
 void INTERNAL_GL_APIENTRY glFramebufferRenderbufferNULL(GLenum target,
                                                         GLenum attachment,
@@ -836,6 +841,22 @@ void INTERNAL_GL_APIENTRY glFramebufferTexture2DNULL(GLenum target,
                                                      GLenum textarget,
                                                      GLuint texture,
                                                      GLint level)
+{}
+
+void INTERNAL_GL_APIENTRY glFramebufferTexture2DMultisampleEXTNULL(GLenum target,
+                                                                   GLenum attachment,
+                                                                   GLenum textarget,
+                                                                   GLuint texture,
+                                                                   GLint level,
+                                                                   GLsizei samples)
+{}
+
+void INTERNAL_GL_APIENTRY glFramebufferTexture2DMultisampleIMGNULL(GLenum target,
+                                                                   GLenum attachment,
+                                                                   GLenum textarget,
+                                                                   GLuint texture,
+                                                                   GLint level,
+                                                                   GLsizei samples)
 {}
 
 void INTERNAL_GL_APIENTRY glFramebufferTexture3DNULL(GLenum target,
@@ -907,7 +928,7 @@ void INTERNAL_GL_APIENTRY glGetActiveAttribNULL(GLuint program,
 void INTERNAL_GL_APIENTRY glGetActiveSubroutineNameNULL(GLuint program,
                                                         GLenum shadertype,
                                                         GLuint index,
-                                                        GLsizei bufsize,
+                                                        GLsizei bufSize,
                                                         GLsizei *length,
                                                         GLchar *name)
 {}
@@ -915,7 +936,7 @@ void INTERNAL_GL_APIENTRY glGetActiveSubroutineNameNULL(GLuint program,
 void INTERNAL_GL_APIENTRY glGetActiveSubroutineUniformNameNULL(GLuint program,
                                                                GLenum shadertype,
                                                                GLuint index,
-                                                               GLsizei bufsize,
+                                                               GLsizei bufSize,
                                                                GLsizei *length,
                                                                GLchar *name)
 {}
@@ -1076,21 +1097,21 @@ void INTERNAL_GL_APIENTRY glGetInternalformatSampleivNVNULL(GLenum target,
                                                             GLenum internalformat,
                                                             GLsizei samples,
                                                             GLenum pname,
-                                                            GLsizei bufSize,
+                                                            GLsizei count,
                                                             GLint *params)
 {}
 
 void INTERNAL_GL_APIENTRY glGetInternalformati64vNULL(GLenum target,
                                                       GLenum internalformat,
                                                       GLenum pname,
-                                                      GLsizei bufSize,
+                                                      GLsizei count,
                                                       GLint64 *params)
 {}
 
 void INTERNAL_GL_APIENTRY glGetInternalformativNULL(GLenum target,
                                                     GLenum internalformat,
                                                     GLenum pname,
-                                                    GLsizei bufSize,
+                                                    GLsizei count,
                                                     GLint *params)
 {}
 
@@ -1213,7 +1234,7 @@ void INTERNAL_GL_APIENTRY glGetProgramResourceivNULL(GLuint program,
                                                      GLuint index,
                                                      GLsizei propCount,
                                                      const GLenum *props,
-                                                     GLsizei bufSize,
+                                                     GLsizei count,
                                                      GLsizei *length,
                                                      GLint *params)
 {}
@@ -1335,7 +1356,7 @@ GLint INTERNAL_GL_APIENTRY glGetSubroutineUniformLocationNULL(GLuint program,
 }
 
 void INTERNAL_GL_APIENTRY
-glGetSyncivNULL(GLsync sync, GLenum pname, GLsizei bufSize, GLsizei *length, GLint *values)
+glGetSyncivNULL(GLsync sync, GLenum pname, GLsizei count, GLsizei *length, GLint *values)
 {}
 
 void INTERNAL_GL_APIENTRY
@@ -1883,7 +1904,12 @@ void INTERNAL_GL_APIENTRY glPointSizeNULL(GLfloat size) {}
 
 void INTERNAL_GL_APIENTRY glPolygonModeNULL(GLenum face, GLenum mode) {}
 
+void INTERNAL_GL_APIENTRY glPolygonModeNVNULL(GLenum face, GLenum mode) {}
+
 void INTERNAL_GL_APIENTRY glPolygonOffsetNULL(GLfloat factor, GLfloat units) {}
+
+void INTERNAL_GL_APIENTRY glPolygonOffsetClampEXTNULL(GLfloat factor, GLfloat units, GLfloat clamp)
+{}
 
 void INTERNAL_GL_APIENTRY glPopDebugGroupNULL() {}
 
@@ -2248,6 +2274,20 @@ void INTERNAL_GL_APIENTRY glRenderbufferStorageMultisampleNULL(GLenum target,
                                                                GLsizei height)
 {}
 
+void INTERNAL_GL_APIENTRY glRenderbufferStorageMultisampleEXTNULL(GLenum target,
+                                                                  GLsizei samples,
+                                                                  GLenum internalformat,
+                                                                  GLsizei width,
+                                                                  GLsizei height)
+{}
+
+void INTERNAL_GL_APIENTRY glRenderbufferStorageMultisampleIMGNULL(GLenum target,
+                                                                  GLsizei samples,
+                                                                  GLenum internalformat,
+                                                                  GLsizei width,
+                                                                  GLsizei height)
+{}
+
 void INTERNAL_GL_APIENTRY glResumeTransformFeedbackNULL() {}
 
 void INTERNAL_GL_APIENTRY glSampleCoverageNULL(GLfloat value, GLboolean invert) {}
@@ -2295,7 +2335,7 @@ void INTERNAL_GL_APIENTRY glSetFenceNVNULL(GLuint fence, GLenum condition) {}
 
 void INTERNAL_GL_APIENTRY glShaderBinaryNULL(GLsizei count,
                                              const GLuint *shaders,
-                                             GLenum binaryformat,
+                                             GLenum binaryFormat,
                                              const void *binary,
                                              GLsizei length)
 {}

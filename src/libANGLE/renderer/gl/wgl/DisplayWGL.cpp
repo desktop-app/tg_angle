@@ -9,6 +9,7 @@
 #include "libANGLE/renderer/gl/wgl/DisplayWGL.h"
 
 #include "common/debug.h"
+#include "common/system_utils.h"
 #include "libANGLE/Config.h"
 #include "libANGLE/Context.h"
 #include "libANGLE/Display.h"
@@ -41,8 +42,8 @@ std::string GetErrorMessage()
     DWORD errorCode     = GetLastError();
     LPSTR messageBuffer = nullptr;
     size_t size         = FormatMessageA(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL, errorCode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
     std::string message(messageBuffer, size);
     if (size == 0)
     {
@@ -105,6 +106,7 @@ DisplayWGL::DisplayWGL(const egl::DisplayState &state)
       mD3d11Module(nullptr),
       mD3D11DeviceHandle(nullptr),
       mD3D11Device(nullptr),
+      mD3D11Device1(nullptr),
       mUseARBShare(true)
 {}
 
@@ -140,33 +142,34 @@ egl::Error DisplayWGL::initializeImpl(egl::Display *display)
     // available.
 
     // Work around compile error from not defining "UNICODE" while Chromium does
-    const LPSTR idcArrow = MAKEINTRESOURCEA(32512);
+    const LPWSTR idcArrow = MAKEINTRESOURCEW(32512);
 
-    std::ostringstream stream;
-    stream << "ANGLE DisplayWGL " << gl::FmtHex(display) << " Intermediate Window Class";
-    std::string className = stream.str();
+    std::wostringstream stream;
+    stream << L"ANGLE DisplayWGL " << gl::FmtHex<egl::Display *, wchar_t>(display)
+           << L" Intermediate Window Class";
+    std::wstring className = stream.str();
 
-    WNDCLASSA intermediateClassDesc     = {};
+    WNDCLASSW intermediateClassDesc     = {};
     intermediateClassDesc.style         = CS_OWNDC;
-    intermediateClassDesc.lpfnWndProc   = DefWindowProcA;
+    intermediateClassDesc.lpfnWndProc   = DefWindowProcW;
     intermediateClassDesc.cbClsExtra    = 0;
     intermediateClassDesc.cbWndExtra    = 0;
     intermediateClassDesc.hInstance     = GetModuleHandle(nullptr);
     intermediateClassDesc.hIcon         = nullptr;
-    intermediateClassDesc.hCursor       = LoadCursorA(nullptr, idcArrow);
-    intermediateClassDesc.hbrBackground = 0;
+    intermediateClassDesc.hCursor       = LoadCursorW(nullptr, idcArrow);
+    intermediateClassDesc.hbrBackground = nullptr;
     intermediateClassDesc.lpszMenuName  = nullptr;
     intermediateClassDesc.lpszClassName = className.c_str();
-    mWindowClass                        = RegisterClassA(&intermediateClassDesc);
+    mWindowClass                        = RegisterClassW(&intermediateClassDesc);
     if (!mWindowClass)
     {
-        return egl::EglNotInitialized()
-               << "Failed to register intermediate OpenGL window class \"" << className.c_str()
-               << "\":" << gl::FmtErr(HRESULT_CODE(GetLastError()));
+        return egl::EglNotInitialized() << "Failed to register intermediate OpenGL window class \""
+                                        << gl::FmtHex<egl::Display *, char>(display)
+                                        << "\":" << gl::FmtErr(HRESULT_CODE(GetLastError()));
     }
 
     HWND placeholderWindow =
-        CreateWindowExA(0, reinterpret_cast<const char *>(mWindowClass), "ANGLE Placeholder Window",
+        CreateWindowExW(0, reinterpret_cast<LPCWSTR>(mWindowClass), L"ANGLE Placeholder Window",
                         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                         CW_USEDEFAULT, nullptr, nullptr, nullptr, nullptr);
     if (!placeholderWindow)
@@ -223,7 +226,7 @@ egl::Error DisplayWGL::initializeImpl(egl::Display *display)
 
     const egl::AttributeMap &displayAttributes = display->getAttributeMap();
     EGLint requestedDisplayType                = static_cast<EGLint>(displayAttributes.get(
-        EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE));
+                       EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE));
     if (requestedDisplayType == EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE &&
         !mFunctionsWGL->hasExtension("WGL_EXT_create_context_es2_profile") &&
         !mFunctionsWGL->hasExtension("WGL_EXT_create_context_es_profile"))
@@ -387,6 +390,7 @@ void DisplayWGL::destroy()
     }
 
     SafeRelease(mD3D11Device);
+    SafeRelease(mD3D11Device1);
 
     if (mDxgiModule)
     {
@@ -451,8 +455,8 @@ SurfaceImpl *DisplayWGL::createPbufferFromClientBuffer(const egl::SurfaceState &
     }
 
     return new D3DTextureSurfaceWGL(state, mRenderer->getStateManager(), buftype, clientBuffer,
-                                    this, mDeviceContext, mD3D11Device, mRenderer->getFunctions(),
-                                    mFunctionsWGL);
+                                    this, mDeviceContext, mD3D11Device, mD3D11Device1,
+                                    mRenderer->getFunctions(), mFunctionsWGL);
 }
 
 SurfaceImpl *DisplayWGL::createPixmapSurface(const egl::SurfaceState &state,
@@ -574,8 +578,8 @@ egl::Error DisplayWGL::validateClientBuffer(const egl::Config *configuration,
         case EGL_D3D_TEXTURE_ANGLE:
         case EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE:
             ANGLE_TRY(const_cast<DisplayWGL *>(this)->initializeD3DDevice());
-            return D3DTextureSurfaceWGL::ValidateD3DTextureClientBuffer(buftype, clientBuffer,
-                                                                        mD3D11Device);
+            return D3DTextureSurfaceWGL::ValidateD3DTextureClientBuffer(
+                buftype, clientBuffer, mD3D11Device, mD3D11Device1);
 
         default:
             return DisplayGL::validateClientBuffer(configuration, buftype, clientBuffer, attribs);
@@ -615,6 +619,9 @@ egl::Error DisplayWGL::initializeD3DDevice()
     {
         return egl::EglNotInitialized() << "Could not create D3D11 device, " << gl::FmtHR(result);
     }
+
+    mD3D11Device->QueryInterface(__uuidof(ID3D11Device1),
+                                 reinterpret_cast<void **>(&mD3D11Device1));
 
     return registerD3DDevice(mD3D11Device, &mD3D11DeviceHandle);
 }
@@ -672,7 +679,8 @@ egl::Error DisplayWGL::makeCurrent(egl::Display *display,
                                    egl::Surface *readSurface,
                                    gl::Context *context)
 {
-    CurrentNativeContext &currentContext = mCurrentNativeContexts[std::this_thread::get_id()];
+    CurrentNativeContext &currentContext =
+        mCurrentNativeContexts[angle::GetCurrentThreadUniqueId()];
 
     HDC newDC = mDeviceContext;
     if (drawSurface)
@@ -901,9 +909,10 @@ egl::Error DisplayWGL::createRenderer(std::shared_ptr<RendererWGL> *outRenderer)
     {
         return egl::EglNotInitialized() << "Failed to make the intermediate WGL context current.";
     }
-    CurrentNativeContext &currentContext = mCurrentNativeContexts[std::this_thread::get_id()];
-    currentContext.dc                    = mDeviceContext;
-    currentContext.glrc                  = context;
+    CurrentNativeContext &currentContext =
+        mCurrentNativeContexts[angle::GetCurrentThreadUniqueId()];
+    currentContext.dc   = mDeviceContext;
+    currentContext.glrc = context;
 
     std::unique_ptr<FunctionsGL> functionsGL(
         new FunctionsGLWindows(mOpenGLModule, mFunctionsWGL->getProcAddress));

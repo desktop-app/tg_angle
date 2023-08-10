@@ -38,12 +38,12 @@ namespace gl
 
 void Context::alphaFunc(AlphaTestFunc func, GLfloat ref)
 {
-    mState.gles1().setAlphaFunc(func, ref);
+    mState.gles1().setAlphaTestParameters(func, ref);
 }
 
 void Context::alphaFuncx(AlphaTestFunc func, GLfixed ref)
 {
-    mState.gles1().setAlphaFunc(func, ConvertFixedToFloat(ref));
+    mState.gles1().setAlphaTestParameters(func, ConvertFixedToFloat(ref));
 }
 
 void Context::clearColorx(GLfixed red, GLfixed green, GLfixed blue, GLfixed alpha)
@@ -478,7 +478,7 @@ void Context::pointSizex(GLfixed size)
 
 void Context::polygonOffsetx(GLfixed factor, GLfixed units)
 {
-    mState.setPolygonOffsetParams(ConvertFixedToFloat(factor), ConvertFixedToFloat(units));
+    mState.setPolygonOffsetParams(ConvertFixedToFloat(factor), ConvertFixedToFloat(units), 0.0f);
 }
 
 void Context::popMatrix()

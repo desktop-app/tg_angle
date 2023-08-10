@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # Copyright 2016 The ANGLE Project Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -9,6 +9,7 @@
 #  NOTE: don't run this script directly. Run scripts/run_code_generation.py.
 
 import sys
+import os
 
 sys.path.append('renderer')
 import angle_format
@@ -117,7 +118,7 @@ def parse_type_case(type, result):
 
 def parse_format_case(format, type_map):
     type_cases = ""
-    for type, internal_format in sorted(type_map.iteritems()):
+    for type, internal_format in sorted(type_map.items()):
         type_cases += parse_type_case(type, internal_format)
     return template_format_case.format(format=format, type_cases=type_cases)
 
@@ -132,9 +133,9 @@ def main():
         outputs = ['format_map_autogen.cpp']
 
         if sys.argv[1] == 'inputs':
-            print ','.join(inputs)
+            print(','.join(inputs))
         elif sys.argv[1] == 'outputs':
-            print ','.join(outputs)
+            print(','.join(outputs))
         else:
             print('Invalid script parameters')
             return 1
@@ -146,7 +147,7 @@ def main():
 
     format_cases = ""
 
-    for format, type_map in sorted(format_map.iteritems()):
+    for format, type_map in sorted(format_map.items()):
         format_cases += parse_format_case(format, type_map)
 
     combo_data_file = 'es3_format_type_combinations.json'
@@ -179,9 +180,9 @@ def main():
 
     es3_combo_cases = ""
 
-    for format, type_combos in combos.iteritems():
+    for format, type_combos in sorted(combos.items()):
         this_type_cases = ""
-        for type, combos in type_combos.iteritems():
+        for type, combos in sorted(type_combos.items()):
             internal_format_cases = ""
             for internal_format in combos:
                 internal_format_cases += "                        case " + internal_format + ":\n"
@@ -193,7 +194,7 @@ def main():
 
     with open('format_map_autogen.cpp', 'wt') as out_file:
         output_cpp = template_cpp.format(
-            script_name=sys.argv[0],
+            script_name=os.path.basename(sys.argv[0]),
             data_source_name=input_script,
             es3_data_source_name=combo_data_file,
             format_cases=format_cases,

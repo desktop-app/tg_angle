@@ -770,6 +770,13 @@ class DispatchTableGL : angle::NonCopyable
     PFNGLIMPORTMEMORYWIN32HANDLEEXTPROC importMemoryWin32HandleEXT = nullptr;
     PFNGLIMPORTMEMORYWIN32NAMEEXTPROC importMemoryWin32NameEXT = nullptr;
 
+    // GL_EXT_multisampled_render_to_texture
+    PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEEXTPROC framebufferTexture2DMultisampleEXT = nullptr;
+    PFNGLRENDERBUFFERSTORAGEMULTISAMPLEEXTPROC renderbufferStorageMultisampleEXT = nullptr;
+
+    // GL_EXT_polygon_offset_clamp
+    PFNGLPOLYGONOFFSETCLAMPEXTPROC polygonOffsetClampEXT = nullptr;
+
     // GL_EXT_semaphore
     PFNGLDELETESEMAPHORESEXTPROC deleteSemaphoresEXT = nullptr;
     PFNGLGENSEMAPHORESEXTPROC genSemaphoresEXT = nullptr;
@@ -786,18 +793,31 @@ class DispatchTableGL : angle::NonCopyable
     PFNGLIMPORTSEMAPHOREWIN32HANDLEEXTPROC importSemaphoreWin32HandleEXT = nullptr;
     PFNGLIMPORTSEMAPHOREWIN32NAMEEXTPROC importSemaphoreWin32NameEXT = nullptr;
 
+    // GL_EXT_shader_framebuffer_fetch_non_coherent
+    PFNGLFRAMEBUFFERFETCHBARRIEREXTPROC framebufferFetchBarrierEXT = nullptr;
+
     // GL_EXT_texture_buffer
     PFNGLTEXBUFFEREXTPROC texBufferEXT = nullptr;
     PFNGLTEXBUFFERRANGEEXTPROC texBufferRangeEXT = nullptr;
 
+    // GL_IMG_multisampled_render_to_texture
+    PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEIMGPROC framebufferTexture2DMultisampleIMG = nullptr;
+    PFNGLRENDERBUFFERSTORAGEMULTISAMPLEIMGPROC renderbufferStorageMultisampleIMG = nullptr;
+
     // GL_KHR_parallel_shader_compile
     PFNGLMAXSHADERCOMPILERTHREADSKHRPROC maxShaderCompilerThreadsKHR = nullptr;
+
+    // GL_MESA_framebuffer_flip_y
+    PFNGLFRAMEBUFFERPARAMETERIMESAPROC framebufferParameteriMESA = nullptr;
 
     // GL_NV_framebuffer_blit
     PFNGLBLITFRAMEBUFFERNVPROC blitFramebufferNV = nullptr;
 
     // GL_NV_internalformat_sample_query
     PFNGLGETINTERNALFORMATSAMPLEIVNVPROC getInternalformatSampleivNV = nullptr;
+
+    // GL_NV_polygon_mode
+    PFNGLPOLYGONMODENVPROC polygonModeNV = nullptr;
 
     // GL_OES_EGL_image
     PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC eGLImageTargetRenderbufferStorageOES = nullptr;

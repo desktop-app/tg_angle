@@ -280,23 +280,22 @@ bool DisplayD3D::testDeviceLost()
 egl::Error DisplayD3D::restoreLostDevice(const egl::Display *display)
 {
     // Release surface resources to make the Reset() succeed
-    for (egl::Surface *surface : mState.surfaceSet)
+    for (auto surface : mState.surfaceMap)
     {
-        ASSERT(!surface->getBoundTexture());
-        SurfaceD3D *surfaceD3D = GetImplAs<SurfaceD3D>(surface);
+        ASSERT(!surface.second->getBoundTexture());
+        SurfaceD3D *surfaceD3D = GetImplAs<SurfaceD3D>(surface.second);
         surfaceD3D->releaseSwapChain();
     }
 
     if (!mRenderer->resetDevice())
     {
-        terminate();
         return egl::EglBadAlloc();
     }
 
     // Restore any surfaces that may have been lost
-    for (const egl::Surface *surface : mState.surfaceSet)
+    for (auto surface : mState.surfaceMap)
     {
-        SurfaceD3D *surfaceD3D = GetImplAs<SurfaceD3D>(surface);
+        SurfaceD3D *surfaceD3D = GetImplAs<SurfaceD3D>(surface.second);
 
         ANGLE_TRY(surfaceD3D->resetSwapChain(display));
     }
@@ -372,11 +371,11 @@ std::string DisplayD3D::getVendorString()
     return std::string();
 }
 
-std::string DisplayD3D::getVersionString()
+std::string DisplayD3D::getVersionString(bool includeFullVersion)
 {
     if (mRenderer)
     {
-        return mRenderer->getVersionString();
+        return mRenderer->getVersionString(includeFullVersion);
     }
     return std::string();
 }
@@ -386,14 +385,14 @@ void DisplayD3D::generateCaps(egl::Caps *outCaps) const
     // Display must be initialized to generate caps
     ASSERT(mRenderer != nullptr);
 
-    outCaps->textureNPOT = mRenderer->getNativeExtensions().textureNPOTOES;
+    outCaps->textureNPOT = mRenderer->getNativeExtensions().textureNpotOES;
 }
 
 egl::Error DisplayD3D::waitClient(const gl::Context *context)
 {
-    for (egl::Surface *surface : mState.surfaceSet)
+    for (auto surface : mState.surfaceMap)
     {
-        SurfaceD3D *surfaceD3D = GetImplAs<SurfaceD3D>(surface);
+        SurfaceD3D *surfaceD3D = GetImplAs<SurfaceD3D>(surface.second);
         ANGLE_TRY(surfaceD3D->checkForOutOfDateSwapChain(this));
     }
 
@@ -430,6 +429,11 @@ gl::Version DisplayD3D::getMaxConformantESVersion() const
     return mRenderer->getMaxConformantESVersion();
 }
 
+Optional<gl::Version> DisplayD3D::getMaxSupportedDesktopVersion() const
+{
+    return Optional<gl::Version>::Invalid();
+}
+
 void DisplayD3D::handleResult(HRESULT hr,
                               const char *message,
                               const char *file,
@@ -443,6 +447,11 @@ void DisplayD3D::handleResult(HRESULT hr,
                 << ":" << line << ". " << message;
 
     mStoredErrorString = errorStream.str();
+}
+
+void DisplayD3D::initializeFrontendFeatures(angle::FrontendFeatures *features) const
+{
+    mRenderer->initializeFrontendFeatures(features);
 }
 
 void DisplayD3D::populateFeatureList(angle::FeatureList *features)

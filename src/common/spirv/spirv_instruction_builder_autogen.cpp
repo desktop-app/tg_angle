@@ -37,16 +37,17 @@ void WriteSpirvHeader(std::vector<uint32_t> *blob, uint32_t idCount)
     //  - Version (1.0)
     //  - ANGLE's Generator number:
     //     * 24 for tool id (higher 16 bits)
-    //     * 0 for tool version (lower 16 bits))
+    //     * 1 for tool version (lower 16 bits))
     //  - Bound (idCount)
     //  - 0 (reserved)
-    constexpr uint32_t kANGLEGeneratorId = 24;
+    constexpr uint32_t kANGLEGeneratorId      = 24;
+    constexpr uint32_t kANGLEGeneratorVersion = 1;
 
     ASSERT(blob->empty());
 
     blob->push_back(spv::MagicNumber);
     blob->push_back(0x00010000);
-    blob->push_back(kANGLEGeneratorId << 16 | 0);
+    blob->push_back(kANGLEGeneratorId << 16 | kANGLEGeneratorVersion);
     blob->push_back(idCount);
     blob->push_back(0x00000000);
 }
@@ -240,12 +241,19 @@ void WriteEntryPoint(Blob *blob,
     }
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpEntryPoint);
 }
-void WriteExecutionMode(Blob *blob, IdRef entryPoint, spv::ExecutionMode mode)
+void WriteExecutionMode(Blob *blob,
+                        IdRef entryPoint,
+                        spv::ExecutionMode mode,
+                        const LiteralIntegerList &operandsList)
 {
     const size_t startSize = blob->size();
     blob->push_back(0);
     blob->push_back(entryPoint);
     blob->push_back(mode);
+    for (const auto &operand : operandsList)
+    {
+        blob->push_back(operand);
+    }
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpExecutionMode);
 }
 void WriteCapability(Blob *blob, spv::Capability capability)
@@ -400,14 +408,6 @@ void WriteTypeFunction(Blob *blob,
         blob->push_back(operand);
     }
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpTypeFunction);
-}
-void WriteTypeForwardPointer(Blob *blob, IdRef pointerType, spv::StorageClass storageClass)
-{
-    const size_t startSize = blob->size();
-    blob->push_back(0);
-    blob->push_back(pointerType);
-    blob->push_back(storageClass);
-    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpTypeForwardPointer);
 }
 void WriteConstantTrue(Blob *blob, IdResultType idResultType, IdResult idResult)
 {
@@ -626,23 +626,6 @@ void WriteCopyMemory(Blob *blob,
     }
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpCopyMemory);
 }
-void WriteCopyMemorySized(Blob *blob,
-                          IdRef target,
-                          IdRef source,
-                          IdRef size,
-                          const spv::MemoryAccessMask *memoryAccess)
-{
-    const size_t startSize = blob->size();
-    blob->push_back(0);
-    blob->push_back(target);
-    blob->push_back(source);
-    blob->push_back(size);
-    if (memoryAccess)
-    {
-        blob->push_back(*memoryAccess);
-    }
-    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpCopyMemorySized);
-}
 void WriteAccessChain(Blob *blob,
                       IdResultType idResultType,
                       IdResult idResult,
@@ -691,35 +674,16 @@ void WriteArrayLength(Blob *blob,
     blob->push_back(arraymember);
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpArrayLength);
 }
-void WriteInBoundsPtrAccessChain(Blob *blob,
-                                 IdResultType idResultType,
-                                 IdResult idResult,
-                                 IdRef base,
-                                 IdRef element,
-                                 const IdRefList &indexesList)
-{
-    const size_t startSize = blob->size();
-    blob->push_back(0);
-    blob->push_back(idResultType);
-    blob->push_back(idResult);
-    blob->push_back(base);
-    blob->push_back(element);
-    for (const auto &operand : indexesList)
-    {
-        blob->push_back(operand);
-    }
-    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpInBoundsPtrAccessChain);
-}
 void WriteDecorate(Blob *blob,
                    IdRef target,
                    spv::Decoration decoration,
-                   const LiteralIntegerList &valuesPairList)
+                   const LiteralIntegerList &valuesList)
 {
     const size_t startSize = blob->size();
     blob->push_back(0);
     blob->push_back(target);
     blob->push_back(decoration);
-    for (const auto &operand : valuesPairList)
+    for (const auto &operand : valuesList)
     {
         blob->push_back(operand);
     }
@@ -729,14 +693,14 @@ void WriteMemberDecorate(Blob *blob,
                          IdRef structureType,
                          LiteralInteger member,
                          spv::Decoration decoration,
-                         const LiteralIntegerList &valuesPairList)
+                         const LiteralIntegerList &valuesList)
 {
     const size_t startSize = blob->size();
     blob->push_back(0);
     blob->push_back(structureType);
     blob->push_back(member);
     blob->push_back(decoration);
-    for (const auto &operand : valuesPairList)
+    for (const auto &operand : valuesList)
     {
         blob->push_back(operand);
     }
@@ -809,7 +773,7 @@ void WriteVectorShuffle(Blob *blob,
                         IdResult idResult,
                         IdRef vector1,
                         IdRef vector2,
-                        const LiteralIntegerList &componentsPairList)
+                        const LiteralIntegerList &componentsList)
 {
     const size_t startSize = blob->size();
     blob->push_back(0);
@@ -817,7 +781,7 @@ void WriteVectorShuffle(Blob *blob,
     blob->push_back(idResult);
     blob->push_back(vector1);
     blob->push_back(vector2);
-    for (const auto &operand : componentsPairList)
+    for (const auto &operand : componentsList)
     {
         blob->push_back(operand);
     }
@@ -842,14 +806,14 @@ void WriteCompositeExtract(Blob *blob,
                            IdResultType idResultType,
                            IdResult idResult,
                            IdRef composite,
-                           const LiteralIntegerList &indexesPairList)
+                           const LiteralIntegerList &indexesList)
 {
     const size_t startSize = blob->size();
     blob->push_back(0);
     blob->push_back(idResultType);
     blob->push_back(idResult);
     blob->push_back(composite);
-    for (const auto &operand : indexesPairList)
+    for (const auto &operand : indexesList)
     {
         blob->push_back(operand);
     }
@@ -860,7 +824,7 @@ void WriteCompositeInsert(Blob *blob,
                           IdResult idResult,
                           IdRef object,
                           IdRef composite,
-                          const LiteralIntegerList &indexesPairList)
+                          const LiteralIntegerList &indexesList)
 {
     const size_t startSize = blob->size();
     blob->push_back(0);
@@ -868,7 +832,7 @@ void WriteCompositeInsert(Blob *blob,
     blob->push_back(idResult);
     blob->push_back(object);
     blob->push_back(composite);
-    for (const auto &operand : indexesPairList)
+    for (const auto &operand : indexesList)
     {
         blob->push_back(operand);
     }
@@ -1227,6 +1191,29 @@ void WriteImage(Blob *blob, IdResultType idResultType, IdResult idResult, IdRef 
     blob->push_back(sampledImage);
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpImage);
 }
+void WriteImageQuerySizeLod(Blob *blob,
+                            IdResultType idResultType,
+                            IdResult idResult,
+                            IdRef image,
+                            IdRef levelofDetail)
+{
+    const size_t startSize = blob->size();
+    blob->push_back(0);
+    blob->push_back(idResultType);
+    blob->push_back(idResult);
+    blob->push_back(image);
+    blob->push_back(levelofDetail);
+    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpImageQuerySizeLod);
+}
+void WriteImageQuerySize(Blob *blob, IdResultType idResultType, IdResult idResult, IdRef image)
+{
+    const size_t startSize = blob->size();
+    blob->push_back(0);
+    blob->push_back(idResultType);
+    blob->push_back(idResult);
+    blob->push_back(image);
+    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpImageQuerySize);
+}
 void WriteImageQueryLod(Blob *blob,
                         IdResultType idResultType,
                         IdResult idResult,
@@ -1240,6 +1227,24 @@ void WriteImageQueryLod(Blob *blob,
     blob->push_back(sampledImage);
     blob->push_back(coordinate);
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpImageQueryLod);
+}
+void WriteImageQueryLevels(Blob *blob, IdResultType idResultType, IdResult idResult, IdRef image)
+{
+    const size_t startSize = blob->size();
+    blob->push_back(0);
+    blob->push_back(idResultType);
+    blob->push_back(idResult);
+    blob->push_back(image);
+    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpImageQueryLevels);
+}
+void WriteImageQuerySamples(Blob *blob, IdResultType idResultType, IdResult idResult, IdRef image)
+{
+    const size_t startSize = blob->size();
+    blob->push_back(0);
+    blob->push_back(idResultType);
+    blob->push_back(idResult);
+    blob->push_back(image);
+    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpImageQuerySamples);
 }
 void WriteConvertFToU(Blob *blob, IdResultType idResultType, IdResult idResult, IdRef floatValue)
 {
@@ -1312,27 +1317,6 @@ void WriteQuantizeToF16(Blob *blob, IdResultType idResultType, IdResult idResult
     blob->push_back(idResult);
     blob->push_back(value);
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpQuantizeToF16);
-}
-void WriteConvertPtrToU(Blob *blob, IdResultType idResultType, IdResult idResult, IdRef pointer)
-{
-    const size_t startSize = blob->size();
-    blob->push_back(0);
-    blob->push_back(idResultType);
-    blob->push_back(idResult);
-    blob->push_back(pointer);
-    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpConvertPtrToU);
-}
-void WriteConvertUToPtr(Blob *blob,
-                        IdResultType idResultType,
-                        IdResult idResult,
-                        IdRef integerValue)
-{
-    const size_t startSize = blob->size();
-    blob->push_back(0);
-    blob->push_back(idResultType);
-    blob->push_back(idResult);
-    blob->push_back(integerValue);
-    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpConvertUToPtr);
 }
 void WriteBitcast(Blob *blob, IdResultType idResultType, IdResult idResult, IdRef operand)
 {
@@ -2741,14 +2725,14 @@ void WriteBranchConditional(Blob *blob,
                             IdRef condition,
                             IdRef trueLabel,
                             IdRef falseLabel,
-                            const LiteralIntegerList &branchweightsPairList)
+                            const LiteralIntegerList &branchweightsList)
 {
     const size_t startSize = blob->size();
     blob->push_back(0);
     blob->push_back(condition);
     blob->push_back(trueLabel);
     blob->push_back(falseLabel);
-    for (const auto &operand : branchweightsPairList)
+    for (const auto &operand : branchweightsList)
     {
         blob->push_back(operand);
     }
@@ -3412,6 +3396,20 @@ void WriteGroupSMaxNonUniformAMD(Blob *blob,
     blob->push_back(operation);
     blob->push_back(x);
     (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpGroupSMaxNonUniformAMD);
+}
+void WriteBeginInvocationInterlockEXT(Blob *blob)
+{
+    const size_t startSize = blob->size();
+    blob->push_back(0);
+
+    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpBeginInvocationInterlockEXT);
+}
+void WriteEndInvocationInterlockEXT(Blob *blob)
+{
+    const size_t startSize = blob->size();
+    blob->push_back(0);
+
+    (*blob)[startSize] = MakeLengthOp(blob->size() - startSize, spv::OpEndInvocationInterlockEXT);
 }
 
 }  // namespace spirv

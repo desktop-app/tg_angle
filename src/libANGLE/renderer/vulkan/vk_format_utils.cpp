@@ -120,26 +120,28 @@ namespace vk
 {
 // Format implementation.
 Format::Format()
-    : intendedFormatID(angle::FormatID::NONE),
-      intendedGLFormat(GL_NONE),
-      actualImageFormatID(angle::FormatID::NONE),
-      actualBufferFormatID(angle::FormatID::NONE),
-      actualCompressedBufferFormatID(angle::FormatID::NONE),
-      imageInitializerFunction(nullptr),
-      textureLoadFunctions(),
-      vertexLoadFunction(nullptr),
-      compressedVertexLoadFunction(nullptr),
-      vertexLoadRequiresConversion(false),
-      compressedVertexLoadRequiresConversion(false),
-      vkBufferFormatIsPacked(false),
-      vkFormatIsInt(false),
-      vkFormatIsUnsigned(false)
+    : mIntendedFormatID(angle::FormatID::NONE),
+      mIntendedGLFormat(GL_NONE),
+      mActualSampleOnlyImageFormatID(angle::FormatID::NONE),
+      mActualRenderableImageFormatID(angle::FormatID::NONE),
+      mActualBufferFormatID(angle::FormatID::NONE),
+      mActualCompressedBufferFormatID(angle::FormatID::NONE),
+      mImageInitializerFunction(nullptr),
+      mTextureLoadFunctions(),
+      mRenderableTextureLoadFunctions(),
+      mVertexLoadFunction(nullptr),
+      mCompressedVertexLoadFunction(nullptr),
+      mVertexLoadRequiresConversion(false),
+      mCompressedVertexLoadRequiresConversion(false),
+      mVkBufferFormatIsPacked(false),
+      mVkFormatIsInt(false),
+      mVkFormatIsUnsigned(false)
 {}
 
 void Format::initImageFallback(RendererVk *renderer, const ImageFormatInitInfo *info, int numInfo)
 {
     size_t skip                 = renderer->getFeatures().forceFallbackFormat.enabled ? 1 : 0;
-    SupportTest testFunction    = HasFullTextureFormatSupport;
+    SupportTest testFunction    = HasNonRenderableTextureFormatSupport;
     const angle::Format &format = angle::Format::Get(info[0].format);
     if (format.isInt() || (format.isFloat() && format.redBits >= 32))
     {
@@ -149,17 +151,21 @@ void Format::initImageFallback(RendererVk *renderer, const ImageFormatInitInfo *
         // enabled automatically by examining format capabilities.
         testFunction = HasNonFilterableTextureFormatSupport;
     }
-    if (format.isSnorm() || format.isBlock)
-    {
-        // Rendering to SNORM textures is not supported on Android, and it's
-        // enabled by the extension EXT_render_snorm.
-        // Compressed textures also need to perform this check.
-        testFunction = HasNonRenderableTextureFormatSupport;
-    }
-    int i = FindSupportedFormat(renderer, info, skip, static_cast<uint32_t>(numInfo), testFunction);
 
-    actualImageFormatID      = info[i].format;
-    imageInitializerFunction = info[i].initializer;
+    int i = FindSupportedFormat(renderer, info, skip, static_cast<uint32_t>(numInfo), testFunction);
+    mActualSampleOnlyImageFormatID = info[i].format;
+    mImageInitializerFunction      = info[i].initializer;
+
+    // Set renderable format.
+    if (testFunction != HasNonFilterableTextureFormatSupport &&
+        !(format.isSnorm() && format.channelCount == 3) && !format.isBlock)
+    {
+        // Rendering to RGB SNORM textures is not supported on Android.
+        // Compressed textures also need to perform this check.
+        testFunction = HasFullTextureFormatSupport;
+        i = FindSupportedFormat(renderer, info, skip, static_cast<uint32_t>(numInfo), testFunction);
+        mActualRenderableImageFormatID = info[i].format;
+    }
 }
 
 void Format::initBufferFallback(RendererVk *renderer,
@@ -170,27 +176,137 @@ void Format::initBufferFallback(RendererVk *renderer,
     {
         size_t skip = renderer->getFeatures().forceFallbackFormat.enabled ? 1 : 0;
         int i       = FindSupportedFormat(renderer, info, skip, compressedStartIndex,
-                                    HasFullBufferFormatSupport);
+                                          HasFullBufferFormatSupport);
 
-        actualBufferFormatID         = info[i].format;
-        vkBufferFormatIsPacked       = info[i].vkFormatIsPacked;
-        vertexLoadFunction           = info[i].vertexLoadFunction;
-        vertexLoadRequiresConversion = info[i].vertexLoadRequiresConversion;
+        mActualBufferFormatID         = info[i].format;
+        mVkBufferFormatIsPacked       = info[i].vkFormatIsPacked;
+        mVertexLoadFunction           = info[i].vertexLoadFunction;
+        mVertexLoadRequiresConversion = info[i].vertexLoadRequiresConversion;
     }
 
-    if (compressedStartIndex < numInfo)
+    if (renderer->getFeatures().compressVertexData.enabled && compressedStartIndex < numInfo)
     {
         int i = FindSupportedFormat(renderer, info, compressedStartIndex, numInfo,
                                     HasFullBufferFormatSupport);
 
-        actualCompressedBufferFormatID         = info[i].format;
-        vkCompressedBufferFormatIsPacked       = info[i].vkFormatIsPacked;
-        compressedVertexLoadFunction           = info[i].vertexLoadFunction;
-        compressedVertexLoadRequiresConversion = info[i].vertexLoadRequiresConversion;
+        mActualCompressedBufferFormatID         = info[i].format;
+        mVkCompressedBufferFormatIsPacked       = info[i].vkFormatIsPacked;
+        mCompressedVertexLoadFunction           = info[i].vertexLoadFunction;
+        mCompressedVertexLoadRequiresConversion = info[i].vertexLoadRequiresConversion;
     }
 }
 
-size_t Format::getImageCopyBufferAlignment() const
+size_t Format::getVertexInputAlignment(bool compressed) const
+{
+    const angle::Format &bufferFormat = getActualBufferFormat(compressed);
+    size_t pixelBytes                 = bufferFormat.pixelBytes;
+    return mVkBufferFormatIsPacked ? pixelBytes : (pixelBytes / bufferFormat.channelCount);
+}
+
+bool HasEmulatedImageChannels(const angle::Format &intendedFormat,
+                              const angle::Format &actualFormat)
+{
+    return (intendedFormat.alphaBits == 0 && actualFormat.alphaBits > 0) ||
+           (intendedFormat.blueBits == 0 && actualFormat.blueBits > 0) ||
+           (intendedFormat.greenBits == 0 && actualFormat.greenBits > 0) ||
+           (intendedFormat.depthBits == 0 && actualFormat.depthBits > 0) ||
+           (intendedFormat.stencilBits == 0 && actualFormat.stencilBits > 0);
+}
+
+bool HasEmulatedImageFormat(angle::FormatID intendedFormatID, angle::FormatID actualFormatID)
+{
+    return actualFormatID != intendedFormatID;
+}
+
+bool operator==(const Format &lhs, const Format &rhs)
+{
+    return &lhs == &rhs;
+}
+
+bool operator!=(const Format &lhs, const Format &rhs)
+{
+    return &lhs != &rhs;
+}
+
+// FormatTable implementation.
+FormatTable::FormatTable() {}
+
+FormatTable::~FormatTable() {}
+
+void FormatTable::initialize(RendererVk *renderer, gl::TextureCapsMap *outTextureCapsMap)
+{
+    for (size_t formatIndex = 0; formatIndex < angle::kNumANGLEFormats; ++formatIndex)
+    {
+        Format &format                           = mFormatData[formatIndex];
+        const auto intendedFormatID              = static_cast<angle::FormatID>(formatIndex);
+        const angle::Format &intendedAngleFormat = angle::Format::Get(intendedFormatID);
+
+        format.initialize(renderer, intendedAngleFormat);
+        format.mIntendedFormatID = intendedFormatID;
+
+        if (!format.valid())
+        {
+            continue;
+        }
+
+        // No sample-able or render-able formats, so nothing left to do. This includes skipping the
+        // rest of the loop for buffer-only formats, since they are not texturable.
+        if (format.mActualSampleOnlyImageFormatID == angle::FormatID::NONE)
+        {
+            continue;
+        }
+
+        bool transcodeEtcToBc = false;
+        if (renderer->getFeatures().supportsComputeTranscodeEtcToBc.enabled &&
+            IsETCFormat(intendedFormatID) &&
+            !angle::Format::Get(format.mActualSampleOnlyImageFormatID).isBlock)
+        {
+            // Check BC format support
+            angle::FormatID bcFormat = GetTranscodeBCFormatID(intendedFormatID);
+            if (HasNonRenderableTextureFormatSupport(renderer, bcFormat))
+            {
+                format.mActualSampleOnlyImageFormatID = bcFormat;
+                transcodeEtcToBc                      = true;
+            }
+        }
+
+        if (format.mActualRenderableImageFormatID == angle::FormatID::NONE)
+        {
+            // If renderable format was not set, it means there is no fallback format for
+            // renderable. We populate this the same formatID as sampleOnly formatID so that
+            // getActualFormatID() will be simpler.
+            format.mActualRenderableImageFormatID = format.mActualSampleOnlyImageFormatID;
+        }
+
+        gl::TextureCaps textureCaps;
+        FillTextureFormatCaps(renderer, format.mActualSampleOnlyImageFormatID, &textureCaps);
+
+        if (textureCaps.texturable)
+        {
+            format.mTextureLoadFunctions = GetLoadFunctionsMap(
+                format.mIntendedGLFormat,
+                transcodeEtcToBc ? intendedFormatID : format.mActualSampleOnlyImageFormatID);
+        }
+
+        if (format.mActualRenderableImageFormatID == format.mActualSampleOnlyImageFormatID)
+        {
+            outTextureCapsMap->set(intendedFormatID, textureCaps);
+            format.mRenderableTextureLoadFunctions = format.mTextureLoadFunctions;
+        }
+        else
+        {
+            FillTextureFormatCaps(renderer, format.mActualRenderableImageFormatID, &textureCaps);
+            outTextureCapsMap->set(intendedFormatID, textureCaps);
+            if (textureCaps.texturable)
+            {
+                format.mRenderableTextureLoadFunctions = GetLoadFunctionsMap(
+                    format.mIntendedGLFormat, format.mActualRenderableImageFormatID);
+            }
+        }
+    }
+}
+
+size_t GetImageCopyBufferAlignment(angle::FormatID actualFormatID)
 {
     // vkCmdCopyBufferToImage must have an offset that is a multiple of 4 as well as a multiple
     // of the texel size (if uncompressed) or pixel block size (if compressed).
@@ -211,83 +327,23 @@ size_t Format::getImageCopyBufferAlignment() const
     // - else texelSize % 4 != 0 gives a 2x multiplier
     // - else there's no multiplier.
     //
-    const angle::Format &format = actualImageFormat();
+    const angle::Format &actualFormat = angle::Format::Get(actualFormatID);
 
-    ASSERT(format.pixelBytes != 0);
-    const size_t texelSize  = format.pixelBytes;
+    ASSERT(actualFormat.pixelBytes != 0);
+    const size_t texelSize  = actualFormat.pixelBytes;
     const size_t multiplier = texelSize % 2 != 0 ? 4 : texelSize % 4 != 0 ? 2 : 1;
     const size_t alignment  = multiplier * texelSize;
 
     return alignment;
 }
 
-size_t Format::getValidImageCopyBufferAlignment() const
+size_t GetValidImageCopyBufferAlignment(angle::FormatID intendedFormatID,
+                                        angle::FormatID actualFormatID)
 {
     constexpr size_t kMinimumAlignment = 16;
-    return (intendedFormatID == angle::FormatID::NONE) ? kMinimumAlignment
-                                                       : getImageCopyBufferAlignment();
-}
-
-bool Format::hasEmulatedImageChannels() const
-{
-    const angle::Format &angleFmt   = intendedFormat();
-    const angle::Format &textureFmt = actualImageFormat();
-
-    return (angleFmt.alphaBits == 0 && textureFmt.alphaBits > 0) ||
-           (angleFmt.blueBits == 0 && textureFmt.blueBits > 0) ||
-           (angleFmt.greenBits == 0 && textureFmt.greenBits > 0) ||
-           (angleFmt.depthBits == 0 && textureFmt.depthBits > 0) ||
-           (angleFmt.stencilBits == 0 && textureFmt.stencilBits > 0);
-}
-
-bool operator==(const Format &lhs, const Format &rhs)
-{
-    return &lhs == &rhs;
-}
-
-bool operator!=(const Format &lhs, const Format &rhs)
-{
-    return &lhs != &rhs;
-}
-
-// FormatTable implementation.
-FormatTable::FormatTable() {}
-
-FormatTable::~FormatTable() {}
-
-void FormatTable::initialize(RendererVk *renderer,
-                             gl::TextureCapsMap *outTextureCapsMap,
-                             std::vector<GLenum> *outCompressedTextureFormats)
-{
-    for (size_t formatIndex = 0; formatIndex < angle::kNumANGLEFormats; ++formatIndex)
-    {
-        Format &format                   = mFormatData[formatIndex];
-        const auto formatID              = static_cast<angle::FormatID>(formatIndex);
-        const angle::Format &angleFormat = angle::Format::Get(formatID);
-
-        format.initialize(renderer, angleFormat);
-        format.intendedFormatID = formatID;
-
-        if (!format.valid())
-        {
-            continue;
-        }
-
-        gl::TextureCaps textureCaps;
-        FillTextureFormatCaps(renderer, format.actualImageFormatID, &textureCaps);
-        outTextureCapsMap->set(formatID, textureCaps);
-
-        if (textureCaps.texturable)
-        {
-            format.textureLoadFunctions =
-                GetLoadFunctionsMap(format.intendedGLFormat, format.actualImageFormatID);
-        }
-
-        if (angleFormat.isBlock)
-        {
-            outCompressedTextureFormats->push_back(format.intendedGLFormat);
-        }
-    }
+    return (intendedFormatID == angle::FormatID::NONE)
+               ? kMinimumAlignment
+               : GetImageCopyBufferAlignment(actualFormatID);
 }
 
 VkImageUsageFlags GetMaximalImageUsageFlags(RendererVk *renderer, angle::FormatID formatID)
@@ -352,11 +408,39 @@ bool HasNonRenderableTextureFormatSupport(RendererVk *renderer, angle::FormatID 
            renderer->hasImageFormatFeatureBits(formatID, kBitsDepth);
 }
 
-size_t GetVertexInputAlignment(const vk::Format &format, bool compressed)
+// Checks if it is a ETC texture format
+bool IsETCFormat(angle::FormatID formatID)
 {
-    const angle::Format &bufferFormat = format.actualBufferFormat(compressed);
-    size_t pixelBytes                 = bufferFormat.pixelBytes;
-    return format.vkBufferFormatIsPacked ? pixelBytes : (pixelBytes / bufferFormat.channelCount);
+    return formatID >= angle::FormatID::EAC_R11G11_SNORM_BLOCK &&
+           formatID <= angle::FormatID::ETC2_R8G8B8_UNORM_BLOCK;
+}
+// Checks if it is a BC texture format
+bool IsBCFormat(angle::FormatID formatID)
+{
+    return formatID >= angle::FormatID::BC1_RGBA_UNORM_BLOCK &&
+           formatID <= angle::FormatID::BC7_RGBA_UNORM_SRGB_BLOCK;
+}
+
+static constexpr angle::FormatID kEtcToBcFormatMapping[] = {
+    angle::FormatID::BC5_RG_SNORM_BLOCK,         // EAC_R11G11_SNORM
+    angle::FormatID::BC5_RG_UNORM_BLOCK,         // EAC_R11G11_UNORM
+    angle::FormatID::BC4_RED_SNORM_BLOCK,        // EAC_R11_SNORM
+    angle::FormatID::BC4_RED_UNORM_BLOCK,        // EAC_R11_UNORM_BLOCK
+    angle::FormatID::BC1_RGB_UNORM_BLOCK,        // ETC1_LOSSY_DECODE_R8G8B8_UNORM
+    angle::FormatID::BC1_RGB_UNORM_BLOCK,        // ETC1_R8G8B8_UNORM
+    angle::FormatID::BC1_RGBA_UNORM_SRGB_BLOCK,  // ETC2_R8G8B8A1_SRGB
+    angle::FormatID::BC1_RGBA_UNORM_BLOCK,       // ETC2_R8G8B8A1_UNORM
+    angle::FormatID::BC3_RGBA_UNORM_SRGB_BLOCK,  // ETC2_R8G8B8A8_SRGB
+    angle::FormatID::BC3_RGBA_UNORM_BLOCK,       // ETC2_R8G8B8A8_UNORM
+    angle::FormatID::BC1_RGB_UNORM_SRGB_BLOCK,   // ETC2_R8G8B8_SRGB
+    angle::FormatID::BC1_RGB_UNORM_BLOCK,        // ETC2_R8G8B8_UNORM
+};
+
+angle::FormatID GetTranscodeBCFormatID(angle::FormatID formatID)
+{
+    ASSERT(IsETCFormat(formatID));
+    return kEtcToBcFormatMapping[static_cast<uint32_t>(formatID) -
+                                 static_cast<uint32_t>(angle::FormatID::EAC_R11G11_SNORM_BLOCK)];
 }
 
 GLenum GetSwizzleStateComponent(const gl::SwizzleState &swizzleState, GLenum component)
@@ -389,12 +473,8 @@ gl::SwizzleState ApplySwizzle(const gl::SwizzleState &formatSwizzle,
     return result;
 }
 
-gl::SwizzleState GetFormatSwizzle(const ContextVk *contextVk,
-                                  const vk::Format &format,
-                                  const bool sized)
+gl::SwizzleState GetFormatSwizzle(const angle::Format &angleFormat, const bool sized)
 {
-    const angle::Format &angleFormat = format.intendedFormat();
-
     gl::SwizzleState internalSwizzle;
 
     if (angleFormat.isLUMA())

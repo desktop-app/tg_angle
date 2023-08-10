@@ -45,7 +45,7 @@ DisplayImpl::DisplayImpl(const egl::DisplayState &state)
 
 DisplayImpl::~DisplayImpl()
 {
-    ASSERT(mState.surfaceSet.empty());
+    ASSERT(mState.surfaceMap.empty());
 }
 
 egl::Error DisplayImpl::prepareForCall()
@@ -70,6 +70,16 @@ const egl::DisplayExtensions &DisplayImpl::getExtensions() const
 }
 
 egl::Error DisplayImpl::handleGPUSwitch()
+{
+    return egl::NoError();
+}
+
+egl::Error DisplayImpl::forceGPUSwitch(EGLint gpuIDHigh, EGLint gpuIDLow)
+{
+    return egl::NoError();
+}
+
+egl::Error DisplayImpl::waitUntilWorkScheduled()
 {
     return egl::NoError();
 }
@@ -114,5 +124,42 @@ const egl::Caps &DisplayImpl::getCaps() const
 DeviceImpl *DisplayImpl::createDevice()
 {
     return new MockDevice();
+}
+
+bool DisplayImpl::isX11() const
+{
+    return false;
+}
+
+bool DisplayImpl::isWayland() const
+{
+    return false;
+}
+
+bool DisplayImpl::isGBM() const
+{
+    return false;
+}
+
+bool DisplayImpl::supportsDmaBufFormat(EGLint format) const
+{
+    UNREACHABLE();
+    return false;
+}
+
+egl::Error DisplayImpl::queryDmaBufFormats(EGLint max_formats, EGLint *formats, EGLint *num_formats)
+{
+    UNREACHABLE();
+    return egl::NoError();
+}
+
+egl::Error DisplayImpl::queryDmaBufModifiers(EGLint format,
+                                             EGLint max_modifiers,
+                                             EGLuint64KHR *modifiers,
+                                             EGLBoolean *external_only,
+                                             EGLint *num_modifiers)
+{
+    UNREACHABLE();
+    return egl::NoError();
 }
 }  // namespace rx

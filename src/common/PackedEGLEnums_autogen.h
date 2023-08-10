@@ -14,7 +14,6 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <angle_gl.h>
 
 #include <cstdint>
 #include <ostream>
@@ -24,6 +23,20 @@ namespace egl
 
 template <typename Enum>
 Enum FromEGLenum(EGLenum from);
+
+enum class ColorSpace : uint8_t
+{
+    sRGB   = 0,
+    Linear = 1,
+
+    InvalidEnum = 2,
+    EnumCount   = 2,
+};
+
+template <>
+ColorSpace FromEGLenum<ColorSpace>(EGLenum from);
+EGLenum ToEGLenum(ColorSpace from);
+std::ostream &operator<<(std::ostream &os, ColorSpace value);
 
 enum class CompositorTiming : uint8_t
 {

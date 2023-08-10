@@ -37,69 +37,26 @@ void DebugAnnotatorVk::endEvent(gl::Context *context,
                                 angle::EntryPoint entryPoint)
 {
     angle::LoggingAnnotator::endEvent(context, eventName, entryPoint);
-    if (vkCmdBeginDebugUtilsLabelEXT && context && isDrawOrDispatchEntryPoint(entryPoint))
+    if (vkCmdBeginDebugUtilsLabelEXT && context)
     {
         ContextVk *contextVk = vk::GetImpl(static_cast<gl::Context *>(context));
-        contextVk->endEventLog(entryPoint);
+        if (angle::IsDrawEntryPoint(entryPoint))
+        {
+            contextVk->endEventLog(entryPoint, PipelineType::Graphics);
+        }
+        else if (angle::IsDispatchEntryPoint(entryPoint))
+        {
+            contextVk->endEventLog(entryPoint, PipelineType::Compute);
+        }
+        else if (angle::IsClearEntryPoint(entryPoint) || angle::IsQueryEntryPoint(entryPoint))
+        {
+            contextVk->endEventLogForClearOrQuery();
+        }
     }
 }
 
-bool DebugAnnotatorVk::getStatus()
+bool DebugAnnotatorVk::getStatus(const gl::Context *context)
 {
     return true;
 }
-
-bool DebugAnnotatorVk::isDrawOrDispatchEntryPoint(angle::EntryPoint entryPoint) const
-{
-    switch (entryPoint)
-    {
-        case angle::EntryPoint::GLDispatchCompute:
-        case angle::EntryPoint::GLDispatchComputeIndirect:
-        case angle::EntryPoint::GLDrawArrays:
-        case angle::EntryPoint::GLDrawArraysIndirect:
-        case angle::EntryPoint::GLDrawArraysInstanced:
-        case angle::EntryPoint::GLDrawArraysInstancedANGLE:
-        case angle::EntryPoint::GLDrawArraysInstancedBaseInstance:
-        case angle::EntryPoint::GLDrawArraysInstancedBaseInstanceANGLE:
-        case angle::EntryPoint::GLDrawArraysInstancedEXT:
-        case angle::EntryPoint::GLDrawBuffer:
-        case angle::EntryPoint::GLDrawBuffers:
-        case angle::EntryPoint::GLDrawBuffersEXT:
-        case angle::EntryPoint::GLDrawElements:
-        case angle::EntryPoint::GLDrawElementsBaseVertex:
-        case angle::EntryPoint::GLDrawElementsBaseVertexEXT:
-        case angle::EntryPoint::GLDrawElementsBaseVertexOES:
-        case angle::EntryPoint::GLDrawElementsIndirect:
-        case angle::EntryPoint::GLDrawElementsInstanced:
-        case angle::EntryPoint::GLDrawElementsInstancedANGLE:
-        case angle::EntryPoint::GLDrawElementsInstancedBaseInstance:
-        case angle::EntryPoint::GLDrawElementsInstancedBaseVertex:
-        case angle::EntryPoint::GLDrawElementsInstancedBaseVertexBaseInstance:
-        case angle::EntryPoint::GLDrawElementsInstancedBaseVertexBaseInstanceANGLE:
-        case angle::EntryPoint::GLDrawElementsInstancedBaseVertexEXT:
-        case angle::EntryPoint::GLDrawElementsInstancedBaseVertexOES:
-        case angle::EntryPoint::GLDrawElementsInstancedEXT:
-        case angle::EntryPoint::GLDrawPixels:
-        case angle::EntryPoint::GLDrawRangeElements:
-        case angle::EntryPoint::GLDrawRangeElementsBaseVertex:
-        case angle::EntryPoint::GLDrawRangeElementsBaseVertexEXT:
-        case angle::EntryPoint::GLDrawRangeElementsBaseVertexOES:
-        case angle::EntryPoint::GLDrawTexfOES:
-        case angle::EntryPoint::GLDrawTexfvOES:
-        case angle::EntryPoint::GLDrawTexiOES:
-        case angle::EntryPoint::GLDrawTexivOES:
-        case angle::EntryPoint::GLDrawTexsOES:
-        case angle::EntryPoint::GLDrawTexsvOES:
-        case angle::EntryPoint::GLDrawTexxOES:
-        case angle::EntryPoint::GLDrawTexxvOES:
-        case angle::EntryPoint::GLDrawTransformFeedback:
-        case angle::EntryPoint::GLDrawTransformFeedbackInstanced:
-        case angle::EntryPoint::GLDrawTransformFeedbackStream:
-        case angle::EntryPoint::GLDrawTransformFeedbackStreamInstanced:
-            return true;
-        default:
-            return false;
-    }
-}
-
 }  // namespace rx
