@@ -2566,8 +2566,7 @@ void InitializeFeatures(const Renderer11DeviceCaps &deviceCaps,
                                 capsVersion < IntelDriverVersion(164815));
 
     // Haswell/Ivybridge drivers occasionally corrupt (small?) (vertex?) texture data uploads.
-    ANGLE_FEATURE_CONDITION(features, setDataFasterThanImageUpload,
-                            !(isIvyBridge || isBroadwell || isHaswell));
+    ANGLE_FEATURE_CONDITION(features, setDataFasterThanImageUpload, false);
 
     ANGLE_FEATURE_CONDITION(features, disableB5G6R5Support,
                             (isIntel && capsVersion >= IntelDriverVersion(150000) &&
