@@ -241,7 +241,7 @@ class Display final : public LabeledObject,
 
     static bool isValidDisplay(const Display *display);
     static bool isValidNativeDisplay(EGLNativeDisplayType display);
-    static bool hasExistingWindowSurface(EGLNativeWindowType window);
+    static bool hasExistingWindowSurface(EGLNativeWindowType window, const Display *display);
 
     bool isDeviceLost() const;
     bool testDeviceLost();
@@ -284,6 +284,7 @@ class Display final : public LabeledObject,
 
     const AttributeMap &getAttributeMap() const { return mAttributeMap; }
     EGLNativeDisplayType getNativeDisplayId() const { return mState.displayId; }
+    EGLAttrib getPlatformDisplayKey() const;
 
     rx::DisplayImpl *getImplementation() const { return mImplementation; }
     Device *getDevice() const;

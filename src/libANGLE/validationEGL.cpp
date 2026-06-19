@@ -8,6 +8,7 @@
 
 #include "libANGLE/validationEGL_autogen.h"
 
+#include "common/debug.h"
 #include "common/utilities.h"
 #include "libANGLE/Config.h"
 #include "libANGLE/Context.h"
@@ -2772,8 +2773,10 @@ bool ValidateCreateWindowSurface(const ValidationContext *val,
         }
     }
 
-    if (Display::hasExistingWindowSurface(window))
+    if (Display::hasExistingWindowSurface(window, display))
     {
+        WARN() << "ANGLE ValidateCreateWindowSurface: native window already has an EGL surface, "
+               << "returning EGL_BAD_ALLOC, window=" << window;
         val->setError(EGL_BAD_ALLOC);
         return false;
     }

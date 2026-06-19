@@ -144,7 +144,12 @@ TLSData *GetDisplayTLS()
 constexpr angle::SubjectIndex kGPUSwitchedSubjectIndex = 0;
 
 static constexpr size_t kWindowSurfaceMapSize = 32;
-typedef angle::FlatUnorderedMap<EGLNativeWindowType, Surface *, kWindowSurfaceMapSize>
+struct WindowSurfaceBinding
+{
+    Display *display;
+    Surface *surface;
+};
+typedef angle::FlatUnorderedMap<EGLNativeWindowType, WindowSurfaceBinding, kWindowSurfaceMapSize>
     WindowSurfaceMap;
 // Get a map of all EGL window surfaces to validate that no window has more than one EGL surface
 // associated with it.
@@ -152,6 +157,19 @@ static WindowSurfaceMap *GetWindowSurfaces()
 {
     static angle::base::NoDestructor<WindowSurfaceMap> windowSurfaces;
     return windowSurfaces.get();
+}
+
+static bool IsStaleWindowSurfaceBinding(const WindowSurfaceBinding &binding,
+                                        const Display *display)
+{
+    if (binding.display == nullptr || display == nullptr || binding.display == display)
+    {
+        return false;
+    }
+
+    const EGLAttrib oldDisplayKey = binding.display->getPlatformDisplayKey();
+    const EGLAttrib newDisplayKey = display->getPlatformDisplayKey();
+    return oldDisplayKey != 0 && newDisplayKey != 0 && oldDisplayKey != newDisplayKey;
 }
 
 struct ANGLEPlatformDisplay
@@ -1365,6 +1383,10 @@ Error Display::createWindowSurface(const Config *configuration,
     {
         ANGLE_TRY(restoreLostDevice());
     }
+    if (hasExistingWindowSurface(window, this))
+    {
+        return EglBadAlloc() << "Native window already has an EGL window surface.";
+    }
 
     SurfaceID id = {mSurfaceHandleAllocator.allocate()};
     SurfacePointer surface(new WindowSurface(mImplementation, id, configuration, window, attribs,
@@ -1377,8 +1399,8 @@ Error Display::createWindowSurface(const Config *configuration,
     mState.surfaceMap.insert(std::pair((*outSurface)->id().value, *outSurface));
 
     WindowSurfaceMap *windowSurfaces = GetWindowSurfaces();
-    ASSERT(windowSurfaces && windowSurfaces->find(window) == windowSurfaces->end());
-    windowSurfaces->insert(std::make_pair(window, *outSurface));
+    ASSERT(windowSurfaces);
+    windowSurfaces->insert(std::make_pair(window, WindowSurfaceBinding{this, *outSurface}));
 
     mSurface = *outSurface;
 
@@ -1733,7 +1755,7 @@ Error Display::destroySurfaceImpl(Surface *surface, SurfaceMap *surfaces)
         for (WindowSurfaceMap::iterator iter = windowSurfaces->begin();
              iter != windowSurfaces->end(); iter++)
         {
-            if (iter->second == surface)
+            if (iter->second.surface == surface)
             {
                 windowSurfaces->erase(iter);
                 surfaceRemoved = true;
@@ -1741,7 +1763,11 @@ Error Display::destroySurfaceImpl(Surface *surface, SurfaceMap *surfaces)
             }
         }
 
-        ASSERT(surfaceRemoved);
+        if (!surfaceRemoved)
+        {
+            WARN() << "ANGLE Display: EGL window surface registration was already removed, surface="
+                   << surface;
+        }
     }
 
     auto iter = surfaces->find(surface->id().value);
@@ -2023,12 +2049,28 @@ bool Display::isValidSync(SyncID syncID) const
     return getSync(syncID) != nullptr;
 }
 
-bool Display::hasExistingWindowSurface(EGLNativeWindowType window)
+bool Display::hasExistingWindowSurface(EGLNativeWindowType window, const Display *display)
 {
     WindowSurfaceMap *windowSurfaces = GetWindowSurfaces();
     ASSERT(windowSurfaces);
 
-    return windowSurfaces->find(window) != windowSurfaces->end();
+    const auto iter = windowSurfaces->find(window);
+    if (iter == windowSurfaces->end())
+    {
+        return false;
+    }
+    if (IsStaleWindowSurfaceBinding(iter->second, display))
+    {
+        WARN() << "ANGLE Display: removing stale EGL window surface registration, window="
+               << window << ", oldDisplay=" << iter->second.display
+               << ", oldDisplayKey=" << iter->second.display->getPlatformDisplayKey()
+               << ", newDisplay=" << display
+               << ", newDisplayKey=" << display->getPlatformDisplayKey();
+        windowSurfaces->erase(iter);
+        return false;
+    }
+
+    return true;
 }
 
 static ClientExtensions GenerateClientExtensions()
@@ -2339,6 +2381,11 @@ Device *Display::getDevice() const
 Surface *Display::getWGLSurface() const
 {
     return mSurface;
+}
+
+EGLAttrib Display::getPlatformDisplayKey() const
+{
+    return mAttributeMap.get(EGL_PLATFORM_ANGLE_DISPLAY_KEY_ANGLE, 0);
 }
 
 gl::Version Display::getMaxSupportedESVersion() const
