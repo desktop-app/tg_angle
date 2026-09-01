@@ -804,9 +804,20 @@ egl::Error Renderer11::initializeD3DDevice()
         PFN_D3D11ON12_CREATE_DEVICE D3D11On12CreateDevice = nullptr;
         {
             ANGLE_TRACE_EVENT0("gpu.angle", "Renderer11::initialize (Load DLLs)");
-            mDxgiModule  = LoadLibrary(TEXT("dxgi.dll"));
-            mD3d11Module = LoadLibrary(TEXT("d3d11.dll"));
-            mDCompModule = LoadLibrary(TEXT("dcomp.dll"));
+            // The modules are kept loaded for the lifetime of the process, see
+            // Renderer11::release(), so a device reset must not load them again.
+            if (!mDxgiModule)
+            {
+                mDxgiModule = LoadLibrary(TEXT("dxgi.dll"));
+            }
+            if (!mD3d11Module)
+            {
+                mD3d11Module = LoadLibrary(TEXT("d3d11.dll"));
+            }
+            if (!mDCompModule)
+            {
+                mDCompModule = LoadLibrary(TEXT("dcomp.dll"));
+            }
 
             // create the D3D11 device
             ASSERT(mDevice == nullptr);
@@ -817,7 +828,10 @@ egl::Error Renderer11::initializeD3DDevice()
 
             if (createD3D11on12Device)
             {
-                mD3d12Module = LoadLibrary(TEXT("d3d12.dll"));
+                if (!mD3d12Module)
+                {
+                    mD3d12Module = LoadLibrary(TEXT("d3d12.dll"));
+                }
                 if (mD3d12Module == nullptr)
                 {
                     return egl::EglNotInitialized(D3D11_INIT_MISSING_DEP)
@@ -2276,32 +2290,19 @@ void Renderer11::release()
     mDevice1.Reset();
     mDebug.Reset();
 
-    if (mD3d11Module)
-    {
-        FreeLibrary(mD3d11Module);
-        mD3d11Module = nullptr;
-    }
-
-    if (mDxgiModule)
-    {
-        FreeLibrary(mDxgiModule);
-        mDxgiModule = nullptr;
-    }
-
-    if (mDCompModule)
-    {
-        FreeLibrary(mDCompModule);
-        mDCompModule = nullptr;
-    }
+    // The D3D11 / DXGI / DComp / D3D12 modules are intentionally never unloaded.
+    //
+    // release() also runs from resetDevice() after a device loss, while D3D
+    // objects of the old device may still be referenced: surfaces destroyed
+    // while current are released only when the context is unmade current, so
+    // restoreLostDevice() does not see them. Unloading d3d11.dll under those
+    // objects made their later Release() jump into unmapped memory (the
+    // module can come back at a different base). The modules are system
+    // libraries needed again for the next device anyway, so keeping them
+    // loaded costs nothing.
 
     mDevice12.Reset();
     mCommandQueue.Reset();
-
-    if (mD3d12Module)
-    {
-        FreeLibrary(mD3d12Module);
-        mD3d12Module = nullptr;
-    }
 
     mCompiler.release();
 
