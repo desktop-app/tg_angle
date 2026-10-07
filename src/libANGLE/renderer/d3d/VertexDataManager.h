@@ -10,6 +10,7 @@
 #ifndef LIBANGLE_RENDERER_D3D_VERTEXDATAMANAGER_H_
 #define LIBANGLE_RENDERER_D3D_VERTEXDATAMANAGER_H_
 
+#include "common/Optional.h"
 #include "common/angleutils.h"
 #include "libANGLE/Constants.h"
 #include "libANGLE/VertexAttribute.h"
@@ -133,7 +134,7 @@ class VertexDataManager : angle::NonCopyable
         ~CurrentValueState();
 
         std::unique_ptr<StreamingVertexBufferInterface> buffer;
-        gl::VertexAttribCurrentValueData data;
+        Optional<gl::VertexAttribCurrentValueData> data;
         size_t offset;
     };
 
